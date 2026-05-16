@@ -1,0 +1,98 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: qr_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Ho_Chi_Minh
+      PGTZ: Asia/Ho_Chi_Minh
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: qr_redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 160m
+          cpus: '0.3'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    image: nth100702/qr-api:v1
+    container_name: qr_api
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "0.0.0.0:8000:8000"
+    volumes:
+      - ./data:/app/data                      # temp_videos, temp_clips, logs
+      - ./sdk/lib:/app/sdk/lib:ro             # libhcnetsdk.so
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
+    environment:
+      - LD_LIBRARY_PATH=/app/sdk/lib          # Linux SDK loader
+
+  worker_ondemand:
+    image: nth100702/worker_ondemand:v1
+    container_name: qr_worker_ondemand
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./sdk/lib:/app/sdk/lib:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: '0.8'
+    environment:
+      - LD_LIBRARY_PATH=/app/sdk/lib
+
+networks:
+  default:
+    name: qr_network
+
+volumes:
+  postgres_data:
+  redis_data:

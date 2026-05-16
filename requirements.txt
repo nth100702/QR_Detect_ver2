@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+
+redis[hiredis]
+
+apscheduler
+pytz
+
+pydantic
+
+asyncpg
+
+opencv-python-headless
+numpy
+
+httpx
+pyzbar

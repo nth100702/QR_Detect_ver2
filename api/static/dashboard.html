@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html lang="vi" x-data="app()" :class="{ 'dark': dark }" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HikVision QR Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Inter', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
+      },
+      colors: {
+        accent: '#f97316',
+      },
+    },
+  },
+}
+</script>
+<style>
+  [x-cloak] { display: none !important; }
+  body { font-family: 'Inter', sans-serif; }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #f97316; border-radius: 2px; }
+  .nav-item.active { background: rgba(249,115,22,0.15); border-left: 3px solid #f97316; color: #f97316; }
+  .dark .nav-item:hover:not(.active) { background: rgba(255,255,255,0.05); }
+  .nav-item:hover:not(.active) { background: rgba(0,0,0,0.06); }
+  .badge { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; padding: 2px 7px; border-radius: 4px; font-weight: 600; letter-spacing: 0.04em; }
+  .badge-waiting     { background:#374151; color:#9ca3af; }
+  .badge-downloading { background:#1e3a5f; color:#60a5fa; }
+  .badge-detecting   { background:#431407; color:#fb923c; }
+  .badge-done        { background:#14532d; color:#4ade80; }
+  .badge-error       { background:#450a0a; color:#f87171; }
+  .badge-running     { background:#1e3a5f; color:#60a5fa; }
+  .badge-active      { background:#14532d; color:#4ade80; }
+  .badge-paused      { background:#431407; color:#fb923c; }
+  .badge-pending     { background:#374151; color:#9ca3af; }
+  html:not(.dark) .badge-waiting     { background:#e5e7eb; color:#6b7280; }
+  html:not(.dark) .badge-downloading { background:#dbeafe; color:#2563eb; }
+  html:not(.dark) .badge-detecting   { background:#ffedd5; color:#ea580c; }
+  html:not(.dark) .badge-done        { background:#dcfce7; color:#16a34a; }
+  html:not(.dark) .badge-error       { background:#fee2e2; color:#dc2626; }
+  html:not(.dark) .badge-running     { background:#dbeafe; color:#2563eb; }
+  html:not(.dark) .badge-active      { background:#dcfce7; color:#16a34a; }
+  html:not(.dark) .badge-paused      { background:#ffedd5; color:#ea580c; }
+  html:not(.dark) .badge-pending     { background:#e5e7eb; color:#6b7280; }
+  .prog-track { height: 6px; border-radius: 3px; overflow: hidden; }
+  .dark .prog-track { background: #1f2937; }
+  .prog-track { background: #e5e7eb; }
+  .prog-fill { height: 100%; background: linear-gradient(90deg, #f97316, #fb923c); border-radius: 3px; transition: width 0.4s ease; }
+  .tbl-row { transition: background 0.15s; cursor: pointer; }
+  .dark .tbl-row:hover { background: rgba(249,115,22,0.08); }
+  .tbl-row:hover { background: rgba(249,115,22,0.06); }
+  .dark .tbl-row.selected { background: rgba(249,115,22,0.15); border-left: 3px solid #f97316; }
+  .tbl-row.selected { background: rgba(249,115,22,0.1); border-left: 3px solid #f97316; }
+  .card { border-radius: 12px; }
+  .dark .card { background: #161b27; border: 1px solid #1f2937; }
+  .card { background: #ffffff; border: 1px solid #e5e7eb; }
+  .inp { border-radius: 8px; padding: 8px 12px; font-size: 0.875rem; outline: none; transition: border 0.2s; font-family: 'Inter', sans-serif; width: 100%; }
+  .dark .inp { background: #0f1117; border: 1px solid #374151; color: #f9fafb; }
+  .inp { background: #fff; border: 1px solid #d1d5db; color: #111827; }
+  .dark .inp:focus { border-color: #f97316; }
+  .inp:focus { border-color: #f97316; }
+  .inp-error { border-color: #ef4444 !important; }
+  .btn { border-radius: 8px; padding: 8px 16px; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: all 0.15s; font-family: 'Inter', sans-serif; display: inline-flex; align-items: center; gap: 6px; }
+  .btn-primary { background: #f97316; color: #fff; }
+  .btn-primary:hover { background: #ea6c10; }
+  .btn-primary:disabled { background: #6b7280; cursor: not-allowed; opacity: 0.6; }
+  .dark .btn-secondary { background: #1f2937; color: #d1d5db; border: 1px solid #374151; }
+  .btn-secondary { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
+  .dark .btn-secondary:hover { background: #374151; }
+  .btn-secondary:hover { background: #e5e7eb; }
+  .btn-danger { background: #dc2626; color: #fff; }
+  .btn-danger:hover { background: #b91c1c; }
+  .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-sm { padding: 4px 10px; font-size: 0.78rem; }
+  @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.4)} }
+  .pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+  @keyframes slideUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+  .slide-up { animation: slideUp 0.25s ease forwards; }
+  @keyframes toastIn  { from{opacity:0;transform:translateX(120%)} to{opacity:1;transform:translateX(0)} }
+  @keyframes toastOut { from{opacity:1;transform:translateX(0)} to{opacity:0;transform:translateX(120%)} }
+  .toast-enter { animation: toastIn  0.3s ease forwards; }
+  .toast-leave { animation: toastOut 0.3s ease forwards; }
+  .cam-check { width:16px; height:16px; accent-color: #f97316; }
+  .sel { border-radius: 8px; padding: 8px 12px; font-size: 0.875rem; outline: none; font-family: 'Inter', sans-serif; }
+  .dark .sel { background: #0f1117; border: 1px solid #374151; color: #f9fafb; }
+  .sel { background: #fff; border: 1px solid #d1d5db; color: #111827; }
+  .label { font-size: 0.75rem; font-weight: 500; margin-bottom: 4px; display: block; }
+  .dark .label { color: #9ca3af; }
+  .label { color: #6b7280; }
+  .err-msg { font-size: 0.75rem; color: #f87171; display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+
+  /* Task card styles */
+  @keyframes taskIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+  .task-card-enter { animation: taskIn 0.2s ease forwards; }
+  .dark .task-card { background: #0f1117; border: 1px solid #1f2937; border-radius: 10px; }
+  .task-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; }
+  .dark .task-card.task-running { border-color: #1e3a5f; }
+  .task-card.task-running { border-color: #bfdbfe; }
+  .dark .task-card.task-done { border-color: #14532d; }
+  .task-card.task-done { border-color: #bbf7d0; }
+  .dark .task-card.task-error { border-color: #450a0a; }
+  .task-card.task-error { border-color: #fecaca; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { display: inline-block; animation: spin 1s linear infinite; }
+
+  /* PATCH 1 — Cancel modal overlay */
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:100;
+                   display:flex; align-items:center; justify-content:center; }
+  .modal-box { border-radius:14px; padding:24px; max-width:380px; width:90%; }
+  .dark .modal-box { background:#161b27; border:1px solid #374151; }
+  .modal-box { background:#fff; border:1px solid #e5e7eb; }
+</style>
+</head>
+<body class="dark:bg-[#0f1117] bg-[#f0f2f5] dark:text-gray-100 text-gray-900 min-h-screen flex">
+
+<!-- ── CANCEL CONFIRM MODAL ─────────────────────────────────────────────── -->
+<!-- PATCH 1: thay 2 confirm() liên tiếp bằng 1 modal rõ ràng             -->
+<div x-show="cancelModal.open" x-cloak class="modal-overlay" @keydown.escape.window="cancelModal.open=false">
+  <div class="modal-box slide-up">
+    <div class="flex items-center gap-3 mb-4">
+      <span class="text-2xl">🛑</span>
+      <h3 class="font-semibold text-base">Huỷ tất cả tasks đang chạy?</h3>
+    </div>
+    <p class="text-sm dark:text-gray-400 text-gray-500 mb-5">
+      Thao tác này sẽ dừng tất cả <strong x-text="queueInfo.active_tasks"></strong> task đang chạy.
+      Các chunk video đã tải sẽ bị xóa khỏi server.
+    </p>
+    <label class="flex items-center gap-2.5 mb-5 cursor-pointer select-none">
+      <input type="checkbox" x-model="cancelModal.withCleanup" class="cam-check" />
+      <span class="text-sm">Xóa luôn chunk video tạm trên server <span class="dark:text-gray-500 text-gray-400">(giải phóng dung lượng)</span></span>
+    </label>
+    <div class="flex gap-2 justify-end">
+      <button class="btn btn-secondary" @click="cancelModal.open=false">Không, quay lại</button>
+      <button class="btn btn-danger" @click="doCancelConfirmed()">🛑 Xác nhận huỷ</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── LOGIN ──────────────────────────────────────────── -->
+<div x-show="!authed" x-cloak class="fixed inset-0 z-50 flex items-center justify-center dark:bg-[#0a0d14] bg-[#f0f2f5]">
+  <div class="card p-8 w-full max-w-sm mx-4 shadow-xl">
+    <div class="flex items-center gap-3 mb-8">
+      <div class="w-10 h-10 rounded-xl bg-accent flex items-center justify-center text-white font-bold text-sm">HK</div>
+      <div>
+        <div class="font-semibold text-base leading-tight">HikVision QR</div>
+        <div class="text-xs dark:text-gray-500 text-gray-400 font-mono mt-0.5">Dashboard</div>
+      </div>
+    </div>
+    <span class="label">API Secret</span>
+    <input type="password" x-model="loginInput" @keydown.enter="doLogin()"
+           class="inp mb-3" placeholder="Nhập API secret..." :disabled="loginLoading" autofocus />
+    <div x-show="loginError" class="text-xs text-red-400 mb-3" x-text="loginError"></div>
+    <button class="btn btn-primary w-full" @click="doLogin()" :disabled="loginLoading || !loginInput.trim()">
+      <span x-show="loginLoading">⏳</span><span x-show="!loginLoading">🔐</span>
+      <span x-text="loginLoading ? 'Đang xác thực...' : 'Đăng nhập'"></span>
+    </button>
+  </div>
+</div>
+
+<!-- ── SIDEBAR ─────────────────────────────────────────── -->
+<aside x-show="authed" x-cloak class="w-56 shrink-0 flex flex-col dark:bg-[#0a0d14] bg-white dark:border-gray-800 border-gray-200 border-r h-screen sticky top-0 z-30">
+  <div class="px-5 py-5 border-b dark:border-gray-800 border-gray-200">
+    <div class="flex items-center gap-2.5">
+      <div class="w-7 h-7 rounded-md bg-accent flex items-center justify-center text-white text-xs font-bold">HK</div>
+      <div>
+        <div class="text-sm font-semibold leading-none">HikVision</div>
+        <div class="text-[10px] dark:text-gray-500 text-gray-400 font-mono mt-0.5">QR Dashboard</div>
+      </div>
+    </div>
+  </div>
+  <nav class="flex-1 p-3 flex flex-col gap-0.5">
+    <template x-for="item in nav" :key="item.id">
+      <button class="nav-item w-full text-left px-3 py-2.5 rounded-lg text-sm flex items-center gap-3 transition-all"
+              :class="{ 'active': page === item.id }" @click="page = item.id">
+        <span class="text-base" x-text="item.icon"></span>
+        <span x-text="item.label" class="font-medium"></span>
+        <span x-show="item.id === 'worker' && queueInfo.active_tasks > 0"
+              class="ml-auto text-[10px] font-mono font-bold bg-accent text-white rounded-full px-1.5 py-0.5 min-w-[18px] text-center"
+              x-text="queueInfo.active_tasks"></span>
+      </button>
+    </template>
+  </nav>
+  <div class="p-3 border-t dark:border-gray-800 border-gray-200 space-y-1.5">
+    <div class="flex items-center gap-2 px-2 py-1">
+      <div class="w-2 h-2 rounded-full pulse-dot" :class="sseConnected ? 'bg-green-400' : 'bg-red-500'"></div>
+      <span class="text-xs dark:text-gray-500 text-gray-400" x-text="sseConnected ? 'Live' : 'Offline'"></span>
+    </div>
+    <button @click="dark = !dark; localStorage.setItem('dark', dark)"
+            class="w-full flex items-center gap-2 px-3 py-2 rounded-lg btn-secondary btn text-xs">
+      <span x-text="dark ? '☀️' : '🌙'"></span>
+      <span x-text="dark ? 'Light mode' : 'Dark mode'"></span>
+    </button>
+    <button @click="logout()"
+            class="w-full flex items-center gap-2 px-3 py-2 rounded-lg btn text-xs dark:text-gray-500 text-gray-400 hover:text-red-400 dark:hover:text-red-400 transition-colors">
+      <span>🚪</span><span>Đăng xuất</span>
+    </button>
+  </div>
+</aside>
+
+<!-- ── MAIN ───────────────────────────────────────────── -->
+<main x-show="authed" x-cloak class="flex-1 overflow-auto">
+
+  <!-- Toast -->
+  <div class="fixed top-4 right-4 z-50 flex flex-col gap-2" style="min-width:280px">
+    <template x-for="(t, i) in toasts" :key="t.id">
+      <div class="card px-4 py-3 flex items-center gap-3 shadow-xl"
+           :class="t.leaving ? 'toast-leave' : 'toast-enter'">
+        <span x-text="t.icon" class="text-lg"></span>
+        <span class="text-sm font-medium" x-text="t.msg"></span>
+      </div>
+    </template>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════
+       PAGE: TÌM QR
+  ══════════════════════════════════════════════════ -->
+  <div x-show="page === 'search'" x-cloak class="p-6 max-w-6xl mx-auto slide-up">
+    <h1 class="text-xl font-semibold mb-5">🔍 Tìm kiếm QR</h1>
+
+    <div class="card p-4 mb-4">
+      <div class="flex flex-wrap gap-3 items-end">
+        <div class="flex-1 min-w-[200px]">
+          <span class="label">Mã QR</span>
+          <!-- PATCH 2: placeholder đổi từ SPXVN thành SĐT/email -->
+          <input x-model="qr.query" @keydown.enter="qr.search()"
+                 class="inp" placeholder="SPXVN... hoặc user@email.com (để trống = xem hôm nay)" />
+        </div>
+        <div>
+          <span class="label">Ngày</span>
+          <input type="date" x-model="qr.date" class="inp" style="width:160px" />
+        </div>
+        <div>
+          <span class="label">Số dòng</span>
+          <select x-model="qr.limit" class="sel">
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" @click="qr.search()" :disabled="qr.loading">
+          <span x-show="qr.loading">⏳</span><span x-show="!qr.loading">🔍</span> Tìm
+        </button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-3 gap-3 mb-4" x-show="qr.results !== null">
+      <div class="card p-3 text-center">
+        <div class="text-2xl font-bold font-mono text-accent" x-text="qr.total"></div>
+        <div class="text-xs dark:text-gray-400 text-gray-500 mt-1">Tổng trong DB</div>
+      </div>
+      <div class="card p-3 text-center">
+        <div class="text-2xl font-bold font-mono" x-text="qr.results?.length ?? 0"></div>
+        <div class="text-xs dark:text-gray-400 text-gray-500 mt-1">Đang hiển thị</div>
+      </div>
+      <div class="card p-3 text-center">
+        <div class="text-2xl font-bold font-mono text-green-400" x-text="qr.results?.filter(r => r.clip_file).length ?? 0"></div>
+        <div class="text-xs dark:text-gray-400 text-gray-500 mt-1">Đã có clip</div>
+      </div>
+    </div>
+
+    <div class="card overflow-hidden mb-4" x-show="qr.results !== null && qr.results.length > 0">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="dark:bg-gray-800/60 bg-gray-50 text-xs dark:text-gray-400 text-gray-500 uppercase tracking-wide">
+            <th class="px-4 py-3 text-left font-semibold">ID</th>
+            <th class="px-4 py-3 text-left font-semibold">Camera</th>
+            <th class="px-4 py-3 text-left font-semibold">QR Value</th>
+            <th class="px-4 py-3 text-left font-semibold">Thời điểm</th>
+            <th class="px-4 py-3 text-left font-semibold">Ca</th>
+            <th class="px-4 py-3 text-center font-semibold">Clip</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y dark:divide-gray-800 divide-gray-100">
+          <template x-for="(row, idx) in qr.results" :key="row.id">
+            <tr class="tbl-row" :class="{ 'selected': qr.selected?.id === row.id }" @click="qr.select(row)">
+              <td class="px-4 py-2.5 font-mono text-xs dark:text-gray-400 text-gray-500" x-text="row.id"></td>
+              <td class="px-4 py-2.5 text-xs font-medium" x-text="row.cam_name || ('CAM ' + row.cam_id)"></td>
+              <td class="px-4 py-2.5 font-mono text-xs truncate max-w-[200px]" x-text="row.qr_value"></td>
+              <td class="px-4 py-2.5 text-xs font-mono" x-text="fmtVN(row.detected_at)"></td>
+              <td class="px-4 py-2.5 text-xs" x-text="(row.shift || '').toLowerCase() === 'morning' ? '🌅 Sáng' : '🌙 Tối'"></td>
+              <td class="px-4 py-2.5 text-center text-sm" x-text="row.clip_file ? '✅' : '—'"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card p-8 text-center dark:text-gray-500 text-gray-400 text-sm"
+         x-show="qr.results !== null && qr.results.length === 0">
+      Không có dữ liệu. Thử thay đổi bộ lọc.
+    </div>
+
+    <div class="card p-5 slide-up" x-show="qr.selected" x-cloak>
+      <div class="flex items-start justify-between mb-4">
+        <h3 class="font-semibold text-sm">📋 Chi tiết scan</h3>
+        <button @click="qr.selected = null" class="dark:text-gray-500 text-gray-400 hover:text-gray-200 text-xl leading-none">×</button>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3">
+          <div class="text-xs dark:text-gray-400 text-gray-500 mb-1">ID</div>
+          <div class="font-mono font-semibold text-sm" x-text="qr.selected?.id"></div>
+        </div>
+        <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3">
+          <div class="text-xs dark:text-gray-400 text-gray-500 mb-1">Camera</div>
+          <div class="font-semibold text-sm" x-text="qr.selected?.cam_name || ('CAM ' + qr.selected?.cam_id)"></div>
+        </div>
+        <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3">
+          <div class="text-xs dark:text-gray-400 text-gray-500 mb-1">Ca</div>
+          <div class="font-semibold text-sm" x-text="(qr.selected?.shift || '').toLowerCase() === 'morning' ? '🌅 Sáng' : '🌙 Tối'"></div>
+        </div>
+        <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3">
+          <div class="text-xs dark:text-gray-400 text-gray-500 mb-1">Clip</div>
+          <div class="font-semibold text-sm" x-text="qr.selected?.clip_file ? '✅ Có' : '❌ Chưa có'"></div>
+        </div>
+      </div>
+      <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3 mb-3 font-mono text-sm break-all" x-text="qr.selected?.qr_value"></div>
+      <div class="text-xs dark:text-gray-400 text-gray-500 mb-4"
+           x-text="'Thời điểm detect: ' + fmtVN(qr.selected?.detected_at)"></div>
+      <!-- Clip đã có -->
+      <div x-show="qr.selected?.clip_file" class="space-y-3">
+        <div class="flex items-center gap-3 p-3 dark:bg-gray-800/50 bg-green-50 rounded-lg">
+          <span class="text-green-400 shrink-0">✅</span>
+          <span class="text-sm dark:text-green-300 text-green-700">Clip đã sẵn sàng</span>
+        </div>
+        <button class="btn btn-primary btn-sm"
+                :disabled="qr.downloading"
+                @click="qr.downloadClip(qr.selected?.id)">
+          <span x-show="qr.downloading" class="spin">⟳</span>
+          <span x-show="!qr.downloading">💾</span>
+          <span x-text="qr.downloading ? 'Đang tải...' : 'Tải về máy'"></span>
+        </button>
+      </div>
+
+      <!-- Chưa có clip -->
+      <div x-show="!qr.selected?.clip_file">
+        <div class="border-t dark:border-gray-700 border-gray-200 my-4"></div>
+        <h4 class="font-semibold text-sm mb-1">📥 Tải footage on-demand</h4>
+        <p class="text-xs dark:text-gray-400 text-gray-500 mb-3">Scan này chưa có clip. Nhấn nút để tải footage ±2 phút từ NVR.</p>
+        <div x-show="!qr.jobId">
+          <button class="btn btn-primary" @click="qr.startJob()">🚀 Tải footage cho scan này</button>
+        </div>
+        <div x-show="qr.jobId" class="space-y-2 mt-2">
+          <div class="flex items-center justify-between text-xs dark:text-gray-400 text-gray-500 mb-1">
+            <span x-text="'Job ' + qr.jobId?.slice(0,8) + '... | ' + (qr.jobStatus || 'pending')"></span>
+            <span x-text="qr.jobPct + '%'"></span>
+          </div>
+          <div class="prog-track"><div class="prog-fill" :style="'width:' + qr.jobPct + '%'"></div></div>
+          <div x-show="qr.jobDone" class="space-y-2">
+            <div class="text-sm text-green-400">✅ Hoàn tất! Footage đã tải về server.</div>
+            <button class="btn btn-primary btn-sm"
+                    :disabled="qr.downloading"
+                    @click="qr.downloadClip(qr.selected?.id)">
+              <span x-show="qr.downloading" class="spin">⟳</span>
+              <span x-show="!qr.downloading">💾</span>
+              <span x-text="qr.downloading ? 'Đang tải...' : 'Tải về máy'"></span>
+            </button>
+          </div>
+          <div x-show="qr.jobError" class="text-sm text-red-400" x-text="'❌ ' + qr.jobError"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════
+       PAGE: WORKER STATUS
+  ══════════════════════════════════════════════════ -->
+  <div x-show="page === 'worker'" x-cloak class="p-6 max-w-5xl mx-auto slide-up">
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h1 class="text-xl font-semibold">⚙️ Worker Status</h1>
+        <p class="text-xs dark:text-gray-400 text-gray-500 mt-0.5">Realtime qua SSE — không cần refresh</p>
+      </div>
+      <button @click="connectSSE()" class="btn btn-secondary btn-sm" x-show="!sseConnected">🔌 Kết nối lại</button>
+    </div>
+
+    <!-- Controls -->
+    <div class="card p-4 mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-sm font-semibold dark:text-gray-300 text-gray-700">🎛️ Điều khiển Worker</span>
+        <span class="badge" :class="'badge-' + (queueInfo.paused ? 'paused' : 'running')"
+              x-text="queueInfo.paused ? 'PAUSED' : 'RUNNING'"></span>
+      </div>
+      <div class="grid grid-cols-3 gap-3 mb-4">
+        <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3 text-center">
+          <div class="text-2xl font-bold font-mono text-accent" x-text="queueInfo.active_tasks ?? '—'"></div>
+          <div class="text-xs dark:text-gray-400 text-gray-500 mt-1">Task đang chạy</div>
+        </div>
+        <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3 text-center">
+          <div class="text-2xl font-bold font-mono" x-text="queueInfo.queue_pending ?? '—'"></div>
+          <div class="text-xs dark:text-gray-400 text-gray-500 mt-1">Chờ trong queue</div>
+        </div>
+        <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3 text-center">
+          <div class="text-2xl font-bold font-mono" x-text="workerData.shift ? workerData.shift.total_scans ?? '—' : '—'"></div>
+          <div class="text-xs dark:text-gray-400 text-gray-500 mt-1">QR ghi DB</div>
+        </div>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn btn-secondary btn-sm"
+                @click="workerAction(queueInfo.paused ? '/scan/resume' : '/scan/pause')"
+                x-text="queueInfo.paused ? '▶️ Tiếp tục' : '⏸️ Tạm dừng'"></button>
+        <!-- Cancel + Cleanup tạm ẩn: cancel không dọn TEMP_CLIP_DIR, cleanup bỏ sót folder chunk -->
+        <!-- TODO: bật lại sau khi fix _cleanup_stale_clips để scan cả TEMP_CLIP_DIR -->
+        <button class="btn btn-secondary btn-sm" @click="fetchQueueInfo(); fetchActiveTasks()">🔄 Làm mới</button>
+      </div>
+    </div>
+
+    <!-- Active Tasks List -->
+    <div class="mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold">🚀 Tasks đang chạy</span>
+          <span x-show="activeTasks.length > 0"
+                class="text-xs font-mono font-bold bg-accent text-white rounded-full px-1.5 py-0.5"
+                x-text="activeTasks.length"></span>
+        </div>
+        <span class="text-xs dark:text-gray-500 text-gray-400">Mỗi trigger = 1 task riêng biệt</span>
+      </div>
+
+      <div x-show="activeTasks.length === 0"
+           class="card p-6 text-center dark:text-gray-500 text-gray-400 text-sm">
+        Không có task nào đang chạy.
+      </div>
+
+      <div class="space-y-3">
+        <template x-for="task in activeTasks" :key="task.job_id">
+          <div class="task-card task-card-enter p-4"
+               :class="{
+                 'task-running': task.status === 'running' || task.status === 'pending',
+                 'task-done':    task.status === 'done',
+                 'task-error':   task.status === 'error'
+               }">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex items-center gap-2.5 flex-wrap">
+                <span x-show="task.status === 'running'" class="spin text-blue-400 text-sm">⟳</span>
+                <span x-show="task.status === 'pending'" class="text-gray-400 text-sm">⏳</span>
+                <span x-show="task.status === 'done'"    class="text-green-400 text-sm">✅</span>
+                <span x-show="task.status === 'error'"   class="text-red-400 text-sm">❌</span>
+                <span class="font-mono text-xs dark:text-gray-400 text-gray-500"
+                      x-text="'#' + task.job_id.slice(0,8) + '…'"></span>
+                <span class="badge"
+                      :class="{
+                        'badge-running':  task.status === 'running',
+                        'badge-pending':  task.status === 'pending',
+                        'badge-done':     task.status === 'done',
+                        'badge-error':    task.status === 'error'
+                      }"
+                      x-text="task.status.toUpperCase()"></span>
+              </div>
+              <div class="text-right shrink-0 ml-2">
+                <div class="text-xs font-mono dark:text-gray-400 text-gray-500"
+                     x-text="task.created_at ? fmtVN(task.created_at) : '—'"></div>
+                <div class="text-xs dark:text-gray-500 text-gray-400 mt-0.5"
+                     x-text="task.qr_value ? task.qr_value.slice(0,24) + (task.qr_value.length > 24 ? '…' : '') : ''"></div>
+              </div>
+            </div>
+
+            <template x-if="task.cameras && Object.keys(task.cameras).length > 0">
+              <div class="space-y-2 mb-3">
+                <template x-for="[camId, cam] in Object.entries(task.cameras)" :key="camId">
+                  <div class="flex items-center gap-3">
+                    <span class="text-xs font-mono dark:text-gray-500 text-gray-400 w-14 shrink-0"
+                          x-text="'CAM ' + camId"></span>
+                    <span class="badge shrink-0" :class="'badge-' + cam.status" x-text="cam.status.toUpperCase()"></span>
+                    <div x-show="cam.status === 'downloading' && cam.chunks_total > 0" class="flex-1 flex items-center gap-2">
+                      <div class="prog-track flex-1">
+                        <div class="prog-fill"
+                             :style="'width:' + Math.round(cam.chunks_done / cam.chunks_total * 100) + '%'"></div>
+                      </div>
+                      <span class="text-xs font-mono dark:text-gray-500 text-gray-400 shrink-0"
+                            x-text="cam.chunks_done + '/' + cam.chunks_total"></span>
+                    </div>
+                    <div x-show="cam.status === 'detecting'" class="flex-1 flex items-center gap-2">
+                      <div class="prog-track flex-1"><div class="prog-fill" style="width:100%"></div></div>
+                      <span class="text-xs dark:text-gray-500 text-gray-400 shrink-0">Scan QR…</span>
+                    </div>
+                    <span x-show="cam.status === 'done'" class="text-xs text-green-400 flex-1"
+                          x-text="'✅ ' + cam.scans_found + ' QR'"></span>
+                    <span x-show="cam.status === 'error'" class="text-xs text-red-400 flex-1 truncate"
+                          x-text="'❌ ' + (cam.current_chunk || 'lỗi')"></span>
+                    <span x-show="cam.status === 'waiting'"
+                          class="text-xs dark:text-gray-500 text-gray-400 flex-1">Chờ…</span>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <template x-if="task.total > 0">
+              <div>
+                <div class="flex items-center justify-between text-xs dark:text-gray-400 text-gray-500 mb-1">
+                  <span x-text="'Tiến độ tổng: ' + (task.done || 0) + '/' + task.total"></span>
+                  <span x-text="Math.round((task.done || 0) / task.total * 100) + '%'"></span>
+                </div>
+                <div class="prog-track">
+                  <div class="prog-fill" :style="'width:' + Math.round((task.done || 0) / task.total * 100) + '%'"></div>
+                </div>
+              </div>
+            </template>
+
+            <div x-show="task.status === 'error' && task.error_msg"
+                 class="mt-2 text-xs text-red-400 dark:bg-red-950/30 bg-red-50 rounded p-2"
+                 x-text="task.error_msg"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Shift info -->
+    <div class="mb-3">
+      <span class="text-sm font-semibold dark:text-gray-300 text-gray-700">📋 Ca scan gần nhất</span>
+    </div>
+
+    <div class="card p-4 mb-4" x-show="workerData.shift">
+      <div class="flex items-center justify-between">
+        <div>
+          <span class="text-sm font-semibold"
+                x-text="'Ca ' + (workerData.shift?.name?.toUpperCase() ?? '') + ' — ' + (workerData.shift?.target_date ?? '')"></span>
+          <div class="text-xs dark:text-gray-400 text-gray-500 mt-0.5"
+               x-text="'Bắt đầu: ' + (workerData.shift?.started_at ?? '') + (workerData.shift?.finished_at ? '  |  Kết thúc: ' + workerData.shift.finished_at : '')"></div>
+        </div>
+        <span class="badge" :class="'badge-' + (workerData.shift?.status ?? 'waiting')"
+              x-text="workerData.shift?.status?.toUpperCase()"></span>
+      </div>
+    </div>
+    <div class="card p-6 text-center dark:text-gray-500 text-gray-400 text-sm" x-show="!workerData.shift">
+      Worker chưa chạy ca nào.
+    </div>
+
+    <template x-if="workerData.cameras && Object.keys(workerData.cameras).length && workerData.shift">
+      <div>
+        <div class="mb-3">
+          <span class="text-sm font-semibold dark:text-gray-300 text-gray-700">📷 Trạng thái camera (ca hiện tại)</span>
+        </div>
+        <div class="space-y-3">
+          <template x-for="[camId, cam] in Object.entries(workerData.cameras)" :key="camId">
+            <div class="card p-4">
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-3">
+                  <span class="font-mono font-semibold text-sm">CAM <span x-text="camId"></span></span>
+                  <span class="badge" :class="'badge-' + cam.status" x-text="cam.status.toUpperCase()"></span>
+                </div>
+                <span class="text-xs font-mono dark:text-gray-500 text-gray-400" x-text="cam.updated_at"></span>
+              </div>
+              <div x-show="cam.status === 'downloading' && cam.chunks_total > 0">
+                <div class="flex justify-between text-xs dark:text-gray-400 text-gray-500 mb-1">
+                  <span x-text="'Chunk ' + cam.chunks_done + '/' + cam.chunks_total + (cam.current_chunk ? ' (' + cam.current_chunk + ')' : '')"></span>
+                  <span x-text="Math.round(cam.chunks_done / cam.chunks_total * 100) + '%'"></span>
+                </div>
+                <div class="prog-track"><div class="prog-fill" :style="'width:' + (cam.chunks_done / cam.chunks_total * 100) + '%'"></div></div>
+              </div>
+              <div x-show="cam.status === 'detecting'">
+                <div class="text-xs dark:text-gray-400 text-gray-500 mb-1">Đang detect QR từ video...</div>
+                <div class="prog-track"><div class="prog-fill" style="width:100%"></div></div>
+              </div>
+              <div x-show="cam.status === 'done'" class="text-xs text-green-400">✅ Hoàn tất — <span x-text="cam.scans_found"></span> QR tìm được</div>
+              <div x-show="cam.status === 'error'" class="text-xs text-red-400">❌ Lỗi: <span x-text="cam.current_chunk || 'unknown'"></span></div>
+              <div x-show="cam.status === 'waiting'" class="text-xs dark:text-gray-500 text-gray-400">Đang chờ đến lượt download...</div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════
+       PAGE: QUẢN LÝ CAMERA
+  ══════════════════════════════════════════════════ -->
+  <div x-show="page === 'cameras'" x-cloak class="p-6 max-w-4xl mx-auto slide-up">
+    <div class="flex items-center justify-between mb-5">
+      <h1 class="text-xl font-semibold">📷 Quản lý Camera</h1>
+      <button class="btn btn-secondary btn-sm" @click="cam.load()">🔄 Làm mới</button>
+    </div>
+
+    <div class="card overflow-hidden mb-5">
+      <div class="px-4 py-3 dark:bg-gray-800/40 bg-gray-50 border-b dark:border-gray-800 border-gray-100 flex items-center gap-2">
+        <span class="text-sm font-semibold">Danh sách camera</span>
+        <span class="text-xs dark:text-gray-400 text-gray-500" x-text="'(' + cam.list.length + ')'"></span>
+      </div>
+      <div x-show="cam.list.length === 0" class="p-8 text-center dark:text-gray-500 text-gray-400 text-sm">Chưa có camera nào.</div>
+
+      <div x-show="cam.list.length > 0"
+           class="grid gap-0 text-xs dark:text-gray-400 text-gray-500 uppercase tracking-wide font-semibold dark:bg-gray-800/40 bg-gray-50 border-b dark:border-gray-800 border-gray-100"
+           style="grid-template-columns: 48px 1fr 100px 90px 90px 110px;">
+        <div class="px-4 py-3">ID</div>
+        <div class="px-4 py-3">Tên</div>
+        <div class="px-4 py-3">Ca</div>
+        <div class="px-4 py-3">NVR Ch</div>
+        <div class="px-4 py-3">Trạng thái</div>
+        <div class="px-4 py-3 text-center">Thao tác</div>
+      </div>
+
+      <div x-show="cam.list.length > 0" class="divide-y dark:divide-gray-800 divide-gray-100">
+        <template x-for="c in cam.list" :key="c.id">
+          <div>
+            <div x-show="cam.editingId !== c.id"
+                 class="grid transition-colors"
+                 :class="c.status === 'deleted'
+                   ? 'opacity-50 dark:bg-gray-900/40 bg-gray-100/80'
+                   : 'dark:hover:bg-gray-800/30 hover:bg-gray-50'"
+                 style="grid-template-columns: 48px 1fr 100px 90px 90px 110px;">
+              <div class="px-4 py-3 font-mono text-xs dark:text-gray-400 text-gray-500 flex items-center" x-text="c.id"></div>
+              <div class="px-4 py-3 font-medium text-sm flex items-center gap-2">
+                <span x-text="c.name"></span>
+                <span x-show="c.status === 'deleted'"
+                      class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-900/40 text-red-400">DELETED</span>
+              </div>
+              <div class="px-4 py-3 text-sm flex items-center" x-text="c.shift === 'morning' ? '🌅 Sáng' : '🌙 Tối'"></div>
+              <div class="px-4 py-3 font-mono text-sm flex items-center" x-text="c.nvr_channel"></div>
+              <div class="px-4 py-3 flex items-center">
+                <span class="badge" :class="'badge-' + c.status" x-text="c.status.toUpperCase()"></span>
+              </div>
+              <div class="px-4 py-3 flex items-center justify-center gap-1">
+                <template x-if="c.status === 'active'">
+                  <div class="flex gap-1">
+                    <button class="btn btn-secondary btn-sm" @click="cam.startEdit(c)">✏️</button>
+                    <button class="btn btn-danger btn-sm" @click="cam.delete(c.id)">🗑️</button>
+                  </div>
+                </template>
+                <template x-if="c.status === 'deleted'">
+                  <button class="btn btn-secondary btn-sm" @click="cam.restore(c.id)">🔄 Restore</button>
+                </template>
+              </div>
+            </div>
+
+            <div x-show="cam.editingId === c.id" class="dark:bg-orange-950/20 bg-orange-50">
+              <div class="grid gap-2 px-3 py-2"
+                   style="grid-template-columns: 48px 1fr 100px 90px 90px 110px;">
+                <div class="font-mono text-xs dark:text-gray-400 flex items-center" x-text="c.id"></div>
+                <div class="flex items-center">
+                  <input x-model="cam.editForm.name" class="inp text-xs"
+                         :class="cam.editError ? 'inp-error' : ''" placeholder="Tên camera" />
+                </div>
+                <div class="flex items-center">
+                  <select x-model="cam.editForm.shift" class="sel text-xs w-full">
+                    <option value="morning">🌅 Sáng</option>
+                    <option value="night">🌙 Tối</option>
+                  </select>
+                </div>
+                <div class="flex items-center">
+                  <input type="number" x-model.number="cam.editForm.nvr_channel" min="1" max="64"
+                         class="inp text-xs" :class="cam.editError ? 'inp-error' : ''" />
+                </div>
+                <div></div>
+                <div class="flex items-center justify-center gap-1">
+                  <button class="btn btn-primary btn-sm" @click="cam.save(c.id)">💾</button>
+                  <button class="btn btn-secondary btn-sm" @click="cam.editingId = null; cam.editError = ''">✖</button>
+                </div>
+              </div>
+              <div x-show="cam.editError" class="px-4 pb-2">
+                <div class="err-msg">⚠️ <span x-text="cam.editError"></span></div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <div class="card p-5">
+      <h3 class="font-semibold text-sm mb-4">➕ Thêm camera mới</h3>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div>
+          <span class="label">Tên camera *</span>
+          <input x-model="cam.newForm.name" class="inp"
+                 :class="cam.addError ? 'inp-error' : ''"
+                 placeholder="Camera 01 - Cổng vào"
+                 @input="cam.addError = ''" />
+        </div>
+        <div>
+          <span class="label">Ca làm việc</span>
+          <select x-model="cam.newForm.shift" class="sel w-full">
+            <option value="morning">🌅 Sáng (7h)</option>
+            <option value="night">🌙 Tối (20h)</option>
+          </select>
+        </div>
+        <div>
+          <span class="label">NVR Channel *</span>
+          <input type="number" x-model.number="cam.newForm.nvr_channel" min="1" max="64"
+                 class="inp" :class="cam.addError ? 'inp-error' : ''"
+                 @input="cam.addError = ''" />
+        </div>
+      </div>
+      <div x-show="cam.addError" class="err-msg mb-3">
+        ⚠️ <span x-text="cam.addError"></span>
+      </div>
+      <button class="btn btn-primary" @click="cam.add()" :disabled="cam.adding">
+        <span x-show="cam.adding">⏳</span> ➕ Thêm Camera
+      </button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════
+       PAGE: SCAN TRIGGER
+  ══════════════════════════════════════════════════ -->
+  <div x-show="page === 'trigger'" x-cloak class="p-6 max-w-4xl mx-auto slide-up">
+    <h1 class="text-xl font-semibold mb-1">🎯 Trigger Scan Thủ Công</h1>
+    <p class="text-sm dark:text-gray-400 text-gray-500 mb-5">Scan playback bất kỳ ngày + khoảng giờ — không cần chờ cron.</p>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="card p-5">
+        <h3 class="font-semibold text-sm mb-4">Cấu hình scan</h3>
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="label" style="margin-bottom:0">Chọn camera</span>
+            <div class="flex gap-2 text-xs">
+              <button class="text-accent hover:underline" @click="trig.selectAll()">Tất cả</button>
+              <span class="dark:text-gray-600 text-gray-300">|</span>
+              <button class="dark:text-gray-400 text-gray-500 hover:underline" @click="trig.selectedCams = []">Bỏ chọn</button>
+            </div>
+          </div>
+          <div class="dark:bg-gray-800/40 bg-gray-50 rounded-lg p-3 max-h-36 overflow-y-auto space-y-1.5">
+            <template x-for="c in trig.cameras" :key="c.id">
+              <label class="flex items-center gap-2.5 cursor-pointer text-sm">
+                <input type="checkbox" class="cam-check" :value="c.id" x-model="trig.selectedCams" />
+                <span class="font-mono text-xs dark:text-gray-400 text-gray-500">CAM <span x-text="c.id"></span></span>
+                <span x-text="c.name"></span>
+                <span class="text-xs dark:text-gray-500 text-gray-400" x-text="'(ch' + c.nvr_channel + ')'"></span>
+              </label>
+            </template>
+            <div x-show="trig.cameras.length === 0" class="text-xs dark:text-gray-500 text-gray-400">Không có camera active.</div>
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-2 mb-4">
+          <div>
+            <span class="label">Ngày footage</span>
+            <input type="date" x-model="trig.date" class="inp text-sm" />
+          </div>
+          <div>
+            <span class="label">Từ giờ</span>
+            <input type="time" x-model="trig.startTime" class="inp text-sm" />
+          </div>
+          <div>
+            <span class="label">Đến giờ</span>
+            <input type="time" x-model="trig.endTime" class="inp text-sm" />
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-2 mb-5">
+          <span class="text-xs dark:text-gray-400 text-gray-500 self-center">⚡ Preset:</span>
+          <button class="btn btn-secondary btn-sm" @click="trig.preset(8,0,19,0)">Cả ngày</button>
+          <button class="btn btn-secondary btn-sm" @click="trig.preset(8,0,12,0)">Buổi sáng</button>
+          <button class="btn btn-secondary btn-sm" @click="trig.preset(13,0,17,0)">Buổi chiều</button>
+        </div>
+        <button class="btn btn-primary w-full" @click="trig.send()"
+                :disabled="trig.sending || trig.selectedCams.length === 0">
+          <span x-show="trig.sending">⏳</span><span x-show="!trig.sending">🚀</span>
+          <span x-text="trig.sending ? 'Đang gửi...' : 'Trigger Scan'"></span>
+        </button>
+      </div>
+
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-sm">📋 Lịch sử trigger</h3>
+          <button class="btn btn-secondary btn-sm" x-show="trig.history.length > 0" @click="trig.history = []">🗑 Xóa</button>
+        </div>
+        <div x-show="trig.history.length === 0" class="text-xs dark:text-gray-500 text-gray-400 text-center py-8">
+          Chưa có trigger nào trong session này.
+        </div>
+        <div class="space-y-2 max-h-[400px] overflow-y-auto">
+          <template x-for="(h, i) in trig.history" :key="i">
+            <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3">
+              <div class="flex items-start justify-between">
+                <div class="space-y-1">
+                  <div class="flex items-center gap-2">
+                    <span class="font-mono text-xs dark:text-gray-400 text-gray-500" x-text="h.sent_at"></span>
+                    <span class="badge badge-done text-[10px]">SENT</span>
+                  </div>
+                  <div class="text-xs font-medium" x-text="'📅 ' + h.date + '  ⏱ ' + h.startTime + ' – ' + h.endTime"></div>
+                  <div class="text-xs dark:text-gray-400 text-gray-500" x-text="'📷 Cam: ' + h.cam_ids.join(', ')"></div>
+                </div>
+                <button class="btn btn-secondary btn-sm ml-2 shrink-0" @click="trig.retry(h)">🔁</button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const H = { 'X-Secret': '', 'Content-Type': 'application/json' };
+function getSecret() { return localStorage.getItem('api_secret') || ''; }
+function setSecret(s) { localStorage.setItem('api_secret', s); H['X-Secret'] = s; }
+H['X-Secret'] = getSecret();
+
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { ...H, ...(opts.headers || {}) } });
+  if (!res.ok) { const txt = await res.text(); throw new Error(`HTTP ${res.status}: ${txt}`); }
+  return res.json();
+}
+
+function app() {
+  return {
+    dark: localStorage.getItem('dark') !== 'false',
+    page: 'search',
+    nav: [
+      { id: 'search',  icon: '🔍', label: 'Tìm QR' },
+      { id: 'worker',  icon: '⚙️', label: 'Worker Status' },
+      { id: 'cameras', icon: '📷', label: 'Quản lý Camera' },
+      { id: 'trigger', icon: '🎯', label: 'Scan Trigger' },
+    ],
+
+    // ── Auth ─────────────────────────────────────────────
+    authed: !!getSecret(),
+    loginInput: '', loginError: '', loginLoading: false,
+
+    async doLogin() {
+      if (!this.loginInput.trim()) return;
+      this.loginLoading = true; this.loginError = '';
+      try {
+        const res = await fetch('/health', { headers: { 'X-Secret': this.loginInput.trim() } });
+        if (!res.ok) { this.loginError = 'Secret không đúng. Thử lại.'; return; }
+        setSecret(this.loginInput.trim());
+        this.authed = true;
+        await this._afterLogin();
+      } catch { this.loginError = 'Không kết nối được server.'; }
+      finally { this.loginLoading = false; }
+    },
+
+    logout() {
+      localStorage.removeItem('api_secret'); H['X-Secret'] = '';
+      this.authed = false;
+      if (this._sse) { this._sse.close(); this._sse = null; }
+      if (this._taskPollTimer) { clearInterval(this._taskPollTimer); }
+      this.sseConnected = false;
+    },
+
+    // ── Toast ─────────────────────────────────────────────
+    toasts: [],
+    toast(msg, icon = 'ℹ️') {
+      const id = Date.now();
+      this.toasts.push({ id, msg, icon, leaving: false });
+      setTimeout(() => {
+        const t = this.toasts.find(x => x.id === id);
+        if (t) t.leaving = true;
+        setTimeout(() => { this.toasts = this.toasts.filter(x => x.id !== id); }, 350);
+      }, 3000);
+    },
+
+    // ── SSE ───────────────────────────────────────────────
+    // workerData: state từ /worker/stream — shift + cameras của ca đang/vừa chạy
+    // activeTasks: list job do client tự track khi trigger; không có endpoint list jobs
+    // queueInfo.active_tasks: đếm từ activeTasks; paused: từ /scan/pause|resume response
+    sseConnected: false,
+    workerData: { shift: null, cameras: {} },
+    queueInfo: { paused: false, active_tasks: 0, queue_pending: 0 },
+    _sse: null,
+    _justCancelled: false,  // flag chặn SSE ghi đè cameras ngay sau cancel
+
+    connectSSE() {
+      if (this._sse) this._sse.close();
+      this._sse = new EventSource(`/worker/stream?secret=${encodeURIComponent(getSecret())}`);
+      this._sse.onopen = () => { this.sseConnected = true; };
+      this._sse.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          // Sau cancel: giữ cameras = {} cho đến khi SSE push state mới thực sự
+          // (nhận biết bằng shift.status === 'running' hoặc cameras có entry mới)
+          if (this._justCancelled) {
+            const hasActive = data.cameras && Object.values(data.cameras).some(
+              c => c.status === 'downloading' || c.status === 'detecting' || c.status === 'waiting'
+            );
+            if (!hasActive) data.cameras = {};
+            else this._justCancelled = false;
+          }
+          // Merge camera progress vào task đang running nếu có
+          if (!this._justCancelled && data.cameras && Object.keys(data.cameras).length) {
+            const runningTask = this.activeTasks.find(t => t.status === 'running');
+            if (runningTask) runningTask.cameras = data.cameras;
+          }
+          this.workerData = data;
+          if (data.queue != null) {
+            this.queueInfo.queue_pending = data.queue.queue_pending ?? this.queueInfo.queue_pending;
+            this.queueInfo.paused        = data.queue.paused        ?? this.queueInfo.paused;
+          }
+        } catch {}
+      };
+      this._sse.onerror = () => { this.sseConnected = false; setTimeout(() => this.connectSSE(), 5000); };
+    },
+
+    // ── Active Tasks ──────────────────────────────────────
+    // Backend không có endpoint list jobs — activeTasks là client-only state.
+    // Được thêm vào khi trigger, cập nhật qua /jobs/{job_id} poll.
+    activeTasks: [],
+    _taskPollTimer: null,
+
+    async fetchActiveTasks() {
+      // Poll từng job đang running/pending — backend chỉ có /jobs/{job_id}
+      const toCheck = this.activeTasks.filter(t => t.status === 'running' || t.status === 'pending');
+      await Promise.all(toCheck.map(async task => {
+        try {
+          const d = await apiFetch(`/jobs/${task.job_id}`);
+          task.status    = d.status;
+          task.done      = d.done      ?? task.done;
+          task.total     = d.total     ?? task.total;
+          task.error_msg = d.error_msg ?? task.error_msg;
+          if (d.status === 'done' || d.status === 'error') task._finishedAt = Date.now();
+        } catch {
+          // job không tìm thấy (Redis miss hoặc expired) → coi như done
+          task.status = 'done'; task._finishedAt = Date.now();
+        }
+      }));
+      // Dọn task đã xong sau 30s
+      const now = Date.now();
+      this.activeTasks = this.activeTasks.filter(t => {
+        if (t.status !== 'done' && t.status !== 'error') return true;
+        if (!t._finishedAt) { t._finishedAt = now; return true; }
+        return (now - t._finishedAt) < 30000;
+      });
+      // Sync badge count
+      this.queueInfo.active_tasks = this.activeTasks.filter(
+        t => t.status === 'running' || t.status === 'pending'
+      ).length;
+    },
+
+    addActiveTask(jobId, meta = {}) {
+      if (this.activeTasks.find(t => t.job_id === jobId)) return;
+      this.activeTasks.unshift({
+        job_id: jobId, status: 'pending', done: 0, total: 0,
+        cameras: {}, qr_value: meta.qr_value || '',
+        created_at: new Date().toISOString(), error_msg: null, _finishedAt: null,
+      });
+      this.queueInfo.active_tasks = this.activeTasks.filter(
+        t => t.status === 'running' || t.status === 'pending'
+      ).length;
+    },
+
+    // fetchQueueInfo: chỉ lấy paused state — active_tasks đếm từ activeTasks
+    async fetchQueueInfo() {
+      try {
+        const d = await apiFetch('/worker/status');
+        if (d.queue != null) {
+          this.queueInfo.queue_pending = d.queue.queue_pending ?? this.queueInfo.queue_pending;
+          this.queueInfo.paused        = d.queue.paused        ?? this.queueInfo.paused;
+        }
+      } catch {}
+    },
+
+    cancelModal: { open: false, withCleanup: true },
+
+    async doCancelConfirmed() {
+      this.cancelModal.open = false;
+      try {
+        const r = await apiFetch('/scan/cancel', { method: 'POST' });
+        this.toast(r.msg || `Đã huỷ ${r.cancelled} task`, '🛑');
+        if (this.cancelModal.withCleanup) {
+          try {
+            const c = await apiFetch('/jobs/cleanup', { method: 'POST' });
+            const dirs  = c.dirs_removed  ?? c.dirs_deleted  ?? c.folders_removed ?? 0;
+            const clips = c.clips_removed ?? c.clips_deleted ?? c.files_removed   ?? 0;
+            this.toast(`Đã xóa ${dirs} folder, ${clips} clip`, '🗑️');
+            if (dirs === 0 && clips === 0) console.info('[cleanup] response fields:', Object.keys(c), c);
+          } catch {}
+        }
+        // Xóa task list và camera state ngay lập tức
+        this.activeTasks = [];
+        this.queueInfo.active_tasks = 0;
+        this.workerData = { ...this.workerData, cameras: {} };
+        // Báo SSE biết vừa cancel — chặn ghi đè cameras cho đến khi có job mới
+        this._justCancelled = true;
+      } catch (e) { this.toast(e.message, '❌'); }
+    },
+
+    async workerAction(endpoint) {
+      try {
+        const r = await apiFetch(endpoint, { method: 'POST' });
+        this.toast(r.msg || 'OK', endpoint.includes('pause') ? '⏸️' : '▶️');
+        // Cập nhật paused state ngay từ response nếu có, không đợi poll
+        if (r.paused != null) this.queueInfo.paused = r.paused;
+        else this.queueInfo.paused = endpoint.includes('pause');
+      } catch (e) { this.toast(e.message, '❌'); }
+    },
+
+    // ── Manual Cleanup ────────────────────────────────────────────
+    cleanupLoading: false,
+    async doManualCleanup() {
+      this.cleanupLoading = true;
+      try {
+        const c = await apiFetch('/jobs/cleanup', { method: 'POST' });
+        // Fallback: thử nhiều tên field khác nhau backend có thể trả về
+        const dirs  = c.dirs_removed  ?? c.dirs_deleted  ?? c.folders_removed ?? 0;
+        const clips = c.clips_removed ?? c.clips_deleted ?? c.files_removed   ?? 0;
+        this.toast(`Đã xóa ${dirs} folder, ${clips} clip`, '🗑️');
+        if (dirs === 0 && clips === 0) {
+          // Log để debug field name thực tế từ backend
+          console.info('[cleanup] response fields:', Object.keys(c), c);
+        }
+      } catch (e) { this.toast(e.message, '❌'); }
+      finally { this.cleanupLoading = false; }
+    },
+
+    // ── Search QR ─────────────────────────────────────────
+    qr: {
+      query: '', date: new Date().toISOString().slice(0,10), limit: '100',
+      loading: false, results: null, total: 0, selected: null,
+      jobId: null, jobStatus: null, jobPct: 0, jobDone: false, jobError: null, jobClipFile: null,
+      downloading: false,
+
+      async downloadClip(scanId) {
+        if (!scanId || this.downloading) return;
+        this.downloading = true;
+        try {
+          const res = await fetch(`/clips/${scanId}`, { headers: { 'X-Secret': getSecret() } });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const disposition = res.headers.get('Content-Disposition') || '';
+          const match = disposition.match(/filename="?([^";\n]+)"?/);
+          const filename = match ? match[1] : `clip_${scanId}.mp4`;
+          const blob = await res.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl; a.download = filename;
+          document.body.appendChild(a); a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        } catch (e) {
+          window._app?.toast('Tải thất bại: ' + e.message, '❌');
+        } finally { this.downloading = false; }
+      },
+
+      async search() {
+        this.loading = true; this.selected = null; this.jobId = null;
+        try {
+          const qs = this.query.trim()
+            ? `qr_value=${encodeURIComponent(this.query.trim())}&limit=${this.limit}`
+            : `date=${this.date}&limit=${this.limit}`;
+          const d = await apiFetch(`/scans?${qs}`);
+          this.results = d.data; this.total = d.total;
+        } catch (e) { window._app?.toast(e.message, '❌'); }
+        finally { this.loading = false; }
+      },
+
+      select(row) {
+        if (this.selected?.id !== row.id) {
+          this.selected = row; this.jobId = null; this.jobDone = false;
+          this.jobError = null; this.jobPct = 0; this.jobClipFile = null;
+        }
+      },
+
+      async startJob() {
+        try {
+          const r = await apiFetch('/jobs', { method: 'POST', body: JSON.stringify({
+            qr_value: this.selected.qr_value,
+            records: [{ scan_id: this.selected.id, cam_id: this.selected.cam_id, detected_at: this.selected.detected_at }],
+          })});
+          this.jobId = r.job_id; this.jobStatus = 'pending'; this.jobPct = 0; this.jobDone = false;
+          window._app?.addActiveTask(r.job_id, { qr_value: this.selected.qr_value });
+          this.pollJob();
+        } catch (e) { window._app?.toast(e.message, '❌'); }
+      },
+
+      async pollJob() {
+        if (!this.jobId) return;
+        try {
+          const d = await apiFetch(`/jobs/${this.jobId}`);
+          this.jobStatus = d.status;
+          this.jobPct = Math.round((d.done || 0) / (d.total || 1) * 100);
+          if (d.status === 'done') {
+            this.jobDone = true;
+            this.jobClipFile = d.clip_file || d.output_file || null;
+            if (this.selected && this.jobClipFile) {
+              this.selected = { ...this.selected, clip_file: this.jobClipFile };
+            }
+            return;
+          }
+          if (d.status === 'error') { this.jobError = d.error_msg || 'Lỗi không xác định'; return; }
+          setTimeout(() => this.pollJob(), 3000);
+        } catch (e) { this.jobError = e.message; }
+      },
+    },
+
+    // ── Camera ────────────────────────────────────────────
+    cam: {
+      list: [], editingId: null, adding: false,
+      editForm: { name: '', shift: 'morning', nvr_channel: 1 },
+      newForm:  { name: '', shift: 'morning', nvr_channel: 1 },
+      editError: '', addError: '',
+
+      _channelTaken(channel, excludeId = null) {
+        return this.list.find(c =>
+          c.nvr_channel === Number(channel) && c.id !== excludeId && c.status === 'active'
+        );
+      },
+      async load() {
+        try { const d = await apiFetch('/cameras'); this.list = d.data; }
+        catch (e) { window._app?.toast(e.message, '❌'); }
+      },
+      startEdit(c) {
+        this.editingId = c.id; this.editError = '';
+        this.editForm = { name: c.name, shift: c.shift, nvr_channel: c.nvr_channel };
+      },
+      async save(id) {
+        this.editError = '';
+        if (!this.editForm.name.trim()) { this.editError = 'Tên camera không được để trống.'; return; }
+        const conflict = this._channelTaken(this.editForm.nvr_channel, id);
+        if (conflict) { this.editError = `Channel ${this.editForm.nvr_channel} đã được dùng bởi "${conflict.name}".`; return; }
+        try {
+          await apiFetch(`/cameras/${id}`, { method: 'PUT', body: JSON.stringify(this.editForm) });
+          window._app?.toast('Đã cập nhật camera', '✅');
+          this.editingId = null; this.editError = '';
+          await this.load();
+        } catch (e) { this.editError = e.message; }
+      },
+      async delete(id) {
+        if (!confirm(`Xoá CAM ${id}?`)) return;
+        try {
+          await apiFetch(`/cameras/${id}`, { method: 'DELETE' });
+          this.list = this.list.map(c => c.id === id ? { ...c, status: 'deleted' } : c);
+          window._app?.toast('Đã xoá camera', '🗑️');
+        } catch (e) { window._app?.toast(e.message, '❌'); }
+      },
+      async restore(id) {
+        try {
+          await apiFetch(`/cameras/${id}/restore`, { method: 'POST' });
+          this.list = this.list.map(c => c.id === id ? { ...c, status: 'active' } : c);
+          window._app?.toast('Đã khôi phục camera', '✅');
+        } catch (e) { window._app?.toast(e.message, '❌'); }
+      },
+      async add() {
+        this.addError = '';
+        if (!this.newForm.name.trim()) { this.addError = 'Tên camera không được để trống.'; return; }
+        const conflict = this._channelTaken(this.newForm.nvr_channel);
+        if (conflict) { this.addError = `Channel ${this.newForm.nvr_channel} đã được dùng bởi "${conflict.name}".`; return; }
+        this.adding = true;
+        try {
+          const r = await apiFetch('/cameras', { method: 'POST', body: JSON.stringify(this.newForm) });
+          window._app?.toast(`Đã thêm camera — ID: ${r.id}`, '✅');
+          this.newForm = { name: '', shift: 'morning', nvr_channel: 1 };
+          await this.load();
+        } catch (e) { this.addError = e.message; }
+        finally { this.adding = false; }
+      },
+    },
+
+    // ── Trigger ───────────────────────────────────────────
+    trig: {
+      cameras: [], selectedCams: [],
+      date: new Date(Date.now() - 86400000).toISOString().slice(0,10),
+      startTime: '08:00', endTime: '19:00',
+      sending: false, history: [],
+
+      async loadCams() {
+        try {
+          const d = await apiFetch('/cameras');
+          this.cameras = d.data.filter(c => c.status === 'active');
+          this.selectedCams = this.cameras.map(c => c.id);
+        } catch {}
+      },
+      selectAll() { this.selectedCams = this.cameras.map(c => c.id); },
+      preset(sh, sm, eh, em) {
+        this.startTime = `${String(sh).padStart(2,'0')}:${String(sm).padStart(2,'0')}`;
+        this.endTime   = `${String(eh).padStart(2,'0')}:${String(em).padStart(2,'0')}`;
+      },
+      async send() {
+        if (!this.selectedCams.length) { window._app?.toast('Chọn ít nhất 1 camera', '⚠️'); return; }
+        if (this.startTime >= this.endTime) { window._app?.toast('Giờ bắt đầu phải trước giờ kết thúc', '⚠️'); return; }
+        this.sending = true;
+        try {
+          const r = await apiFetch('/scan/trigger', { method: 'POST', body: JSON.stringify({
+            cam_ids: this.selectedCams.map(Number), date: this.date,
+            start_time: this.startTime, end_time: this.endTime,
+          })});
+          if (r && r.job_id) window._app?.addActiveTask(r.job_id, {});
+          // PATCH 3: sync queueInfo từ trigger response (backend trả về active_tasks, queue_pending)
+          if (r) {
+            window._app.queueInfo.active_tasks  = r.active_tasks  ?? window._app.queueInfo.active_tasks;
+            window._app.queueInfo.queue_pending = r.queue_pending ?? window._app.queueInfo.queue_pending;
+          }
+          this.history.unshift({ cam_ids: [...this.selectedCams], date: this.date,
+            startTime: this.startTime, endTime: this.endTime,
+            sent_at: new Date().toLocaleTimeString('vi-VN') });
+          window._app?.toast('Job đã gửi đến worker!', '✅');
+          await window._app?.fetchQueueInfo();
+        } catch (e) { window._app?.toast(e.message, '❌'); }
+        finally { this.sending = false; }
+      },
+      async retry(h) {
+        try {
+          const r = await apiFetch('/scan/trigger', { method: 'POST', body: JSON.stringify({
+            cam_ids: h.cam_ids.map(Number), date: h.date,
+            start_time: h.startTime, end_time: h.endTime,
+          })});
+          if (r && r.job_id) window._app?.addActiveTask(r.job_id, {});
+          if (r) {
+            window._app.queueInfo.active_tasks  = r.active_tasks  ?? window._app.queueInfo.active_tasks;
+            window._app.queueInfo.queue_pending = r.queue_pending ?? window._app.queueInfo.queue_pending;
+          }
+          window._app?.toast('Đã trigger lại!', '🔁');
+          await window._app?.fetchQueueInfo();
+        } catch (e) { window._app?.toast(e.message, '❌'); }
+      },
+    },
+
+    // ── Init ──────────────────────────────────────────────
+    async _afterLogin() {
+      this.connectSSE();
+      this.fetchQueueInfo();
+
+      // Poll /jobs/{id} cho từng task đang chạy, mỗi 3s
+      // fetchActiveTasks chỉ gọi API nếu có task running/pending
+      this._taskPollTimer = setInterval(() => this.fetchActiveTasks(), 3000);
+
+      await this.qr.search();
+      await this.cam.load();
+      await this.trig.loadCams();
+      this.$watch('page', async (p) => {
+        if (p === 'cameras') await this.cam.load();
+        if (p === 'trigger') await this.trig.loadCams();
+        if (p === 'worker') {
+          await this.fetchQueueInfo();
+          await this.fetchActiveTasks();
+        }
+      });
+    },
+
+    async init() {
+      window._app = this;
+      if (this.authed) await this._afterLogin();
+    },
+  };
+}
+
+function fmtVN(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).replace(',', '');
+}
+</script>
+</body>
+</html>
