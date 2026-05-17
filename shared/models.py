@@ -51,28 +51,24 @@ LUNCH_END     = dtime(13, 0)
 WORK_END      = dtime(17, 0)
 
 QR_VALID_PREFIX   = ""
-QR_INVALID_PREFIX = ""  # giữ lại nếu muốn filter thêm theo prefix
-
-# Các pattern bị loại bất kể QR_VALID_PREFIX
-_INVALID_PATTERNS = [
-    re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),          # email
-    re.compile(r"^(\+84|84|0)(3|5|7|8|9)\d{8}$"),        # SĐT Việt Nam
-]
-
+QR_INVALID_PREFIX = ""
 
 def is_valid_qr(qr: str) -> bool:
-    # Loại email và số điện thoại
-    for pattern in _INVALID_PATTERNS:
-        if pattern.match(qr.strip()):
-            return False
-
-    # Loại theo prefix tùy chỉnh
-    if QR_INVALID_PREFIX and qr.startswith(QR_INVALID_PREFIX):
+    v = qr.strip()
+    
+    # Phải bắt đầu bằng chữ cái và không chứa @
+    if not v or not v[0].isalpha() or "@" in v:
         return False
 
-    if not QR_VALID_PREFIX:
-        return True
-    return qr.startswith(QR_VALID_PREFIX)
+    # Loại theo invalid prefix tùy chỉnh
+    if QR_INVALID_PREFIX and v.startswith(QR_INVALID_PREFIX):
+        return False
+
+    # Nếu có valid prefix thì phải khớp
+    if QR_VALID_PREFIX:
+        return v.startswith(QR_VALID_PREFIX)
+
+    return True
 
 
 def get_shift(dt: datetime) -> str:

@@ -90,10 +90,22 @@ async def restore_camera(cam_id: int) -> bool:
     return result == "UPDATE 1"
 
 async def delete_camera(cam_id: int) -> bool:
-    result = await get_pool().execute(
-        "UPDATE cameras SET status='deleted' WHERE id=$1", cam_id
+    pool = get_pool()
+    
+    has_scans = await pool.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM qr_scans WHERE cam_id=$1)", cam_id
     )
-    return result == "UPDATE 1"
+    
+    if has_scans:
+        result = await pool.execute(
+            "UPDATE cameras SET status='deleted' WHERE id=$1", cam_id
+        )
+        return result == "UPDATE 1"
+    else:
+        result = await pool.execute(
+            "DELETE FROM cameras WHERE id=$1", cam_id
+        )
+        return result == "DELETE 1"
 
 
 async def get_channel_map() -> dict[int, int]:

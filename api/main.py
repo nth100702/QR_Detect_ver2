@@ -101,53 +101,202 @@ def get_scan_trigger_queue() -> asyncio.Queue:
     return _scan_queue
 
 # ── Worker: download + detect pipeline ──────────────────────────
-async def _download_with_progress(
+# async def _download_with_progress(
+#     cam_id:       int,
+#     date:         datetime,
+#     start_hour:   int,
+#     end_hour:     int,
+#     start_minute: int = 0,
+#     end_minute:   int = 0,
+# ):
+#     from worker_scheduled.downloader import _semaphore
+#     from shared.hikvision_playback import get_playback
+
+#     footage_start = TZ.normalize(date.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0))
+#     footage_end   = TZ.normalize(date.replace(hour=end_hour,   minute=end_minute,   second=0, microsecond=0))
+#     chunks        = chunk_ranges(footage_start, footage_end)
+#     total         = len(chunks)
+
+#     set_cam_downloading(cam_id, total)
+#     out_dir = TEMP_VIDEO_DIR / str(cam_id) / date.strftime("%Y%m%d")
+#     out_dir.mkdir(parents=True, exist_ok=True)
+
+#     # Đăng ký folder này với task hiện tại để cleanup an toàn
+#     task_name = asyncio.current_task().get_name() if asyncio.current_task() else "_scheduler"
+#     _active_dirs.setdefault(task_name, set()).add(out_dir)
+
+#     results  = []
+#     playback = get_playback()
+
+#     # async with _semaphore:
+#     #     for idx, (c_start, c_end) in enumerate(chunks):
+#     #         label = f"{c_start:%H:%M}–{c_end:%H:%M}"
+#     #         set_cam_chunk_progress(cam_id, idx, label, total)
+
+#     #         out = out_dir / f"chunk_{c_start:%H%M}.mp4"
+#     #         if out.exists() and out.stat().st_size > 0:
+#     #             wlogger.debug(f"[CAM {cam_id}] {label} cached, skip")
+#     #             results.append((out, c_start, c_end))
+#     #             continue
+
+#     #         ok = await playback.async_download_clip(cam_id, c_start, c_end, out)
+#     #         if ok:
+#     #             results.append((out, c_start, c_end))
+#     #         else:
+#     #             wlogger.error(f"[CAM {cam_id}] {label} FAILED")
+
+#     # return results
+
+
+#     for idx, (c_start, c_end) in enumerate(chunks):
+#         label = f"{c_start:%H:%M}–{c_end:%H:%M}"
+#         out = out_dir / f"chunk_{c_start:%H%M}.mp4"
+#         if out.exists() and out.stat().st_size > 0:
+#             wlogger.debug(f"[CAM {cam_id}] {label} cached, skip")
+#             results.append((out, c_start, c_end))
+#             continue
+ 
+#         async with _semaphore:
+#             ok = await playback.async_download_clip(cam_id, c_start, c_end, out)
+#         await set_cam_chunk_progress(cam_id, idx + 1, label, total)  # update sau download
+#         if ok:
+#             results.append((out, c_start, c_end))
+#         else:
+#             wlogger.error(f"[CAM {cam_id}] {label} FAILED")
+ 
+#     return results
+
+
+# async def scan_date(
+#     cam_ids:      list[int],
+#     target_date:  datetime,
+#     start_hour:   int,
+#     end_hour:     int,
+#     start_minute: int = 0,
+#     end_minute:   int = 0,
+#     label:        str = "",
+# ) -> int:
+#     from shared.db import get_channel_map
+#     get_playback().cfg.channel_map = await get_channel_map()
+#     wlogger.info(f"Channel map: {get_playback().cfg.channel_map}")
+#     date_str = target_date.strftime("%Y-%m-%d")
+#     label    = label or f"scan {date_str} {start_hour:02d}:{start_minute:02d}–{end_hour:02d}:{end_minute:02d}"
+
+#     wlogger.info(f"=== [{label}] cams={cam_ids} ===")
+#     set_shift_started(label, date_str, cam_ids)
+
+#     dl_tasks = [
+#         _download_with_progress(
+#             cam_id, target_date,
+#             start_hour, end_hour,
+#             start_minute, end_minute,
+#         )
+#         for cam_id in cam_ids
+#     ]
+#     cam_results = await asyncio.gather(*dl_tasks, return_exceptions=True)
+
+#     async def _detect_cam(cid, chunks):
+#         n = 0
+#         for (path, c_start, c_end) in chunks:
+#             n += await process_video(path, cid, c_start, c_end)
+#         await set_cam_done(cid, n)
+#         return n
+
+#     detect_tasks = []
+#     for cam_id, chunks in zip(cam_ids, cam_results):
+#         if isinstance(chunks, Exception):
+#             wlogger.error(f"[CAM {cam_id}] Download exception: {chunks}")
+#             await set_cam_error(cam_id, str(chunks))
+#             continue
+#         if not chunks:
+#             wlogger.warning(f"[CAM {cam_id}] Không có chunk nào tải được")
+#             await set_cam_done(cam_id, 0)
+#             continue
+#         await set_cam_detecting(cam_id)
+#         detect_tasks.append(_detect_cam(cam_id, chunks))
+
+#     results     = await asyncio.gather(*detect_tasks, return_exceptions=True)
+#     total_scans = sum(r for r in results if isinstance(r, int))
+
+#     set_shift_finished(total_scans)
+#     wlogger.info(f"=== [{label}] done | total_scans={total_scans} ===")
+#     return total_scans
+
+async def _download_detect_pipeline(
     cam_id:       int,
     date:         datetime,
     start_hour:   int,
     end_hour:     int,
     start_minute: int = 0,
     end_minute:   int = 0,
-):
-    from worker_scheduled.downloader import _semaphore
+) -> int:
+    """
+    Pipeline download → detect → delete per chunk.
+    Trả về tổng số QR scan đã POST thành công cho cam này.
+ 
+    Thay thế cặp (_download_with_progress + _detect_cam) trong scan_date().
+    Disk usage: tối đa 1 chunk file (~50 MB) per cam tại bất kỳ thời điểm nào.
+    """
+    from worker_scheduled.downloader import _semaphore, chunk_ranges
     from shared.hikvision_playback import get_playback
-
-    footage_start = TZ.normalize(date.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0))
-    footage_end   = TZ.normalize(date.replace(hour=end_hour,   minute=end_minute,   second=0, microsecond=0))
-    chunks        = chunk_ranges(footage_start, footage_end)
-    total         = len(chunks)
-
-    set_cam_downloading(cam_id, total)
+ 
+    footage_start = TZ.normalize(
+        date.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+    )
+    footage_end = TZ.normalize(
+        date.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+    )
+    chunks = chunk_ranges(footage_start, footage_end)
+    total  = len(chunks)
+ 
     out_dir = TEMP_VIDEO_DIR / str(cam_id) / date.strftime("%Y%m%d")
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Đăng ký folder này với task hiện tại để cleanup an toàn
+ 
+    # Đăng ký folder với task hiện tại (cleanup an toàn khi cancel)
     task_name = asyncio.current_task().get_name() if asyncio.current_task() else "_scheduler"
     _active_dirs.setdefault(task_name, set()).add(out_dir)
-
-    results  = []
+ 
+    set_cam_downloading(cam_id, total)
     playback = get_playback()
-
-    async with _semaphore:
-        for idx, (c_start, c_end) in enumerate(chunks):
-            label = f"{c_start:%H:%M}–{c_end:%H:%M}"
-            set_cam_chunk_progress(cam_id, idx, label, total)
-
-            out = out_dir / f"chunk_{c_start:%H%M}.mp4"
-            if out.exists() and out.stat().st_size > 0:
-                wlogger.debug(f"[CAM {cam_id}] {label} cached, skip")
-                results.append((out, c_start, c_end))
+    total_saved = 0
+ 
+    for idx, (c_start, c_end) in enumerate(chunks):
+        label = f"{c_start:%H:%M}–{c_end:%H:%M}"
+        out   = out_dir / f"chunk_{c_start:%H%M}.mp4"
+ 
+        # ── Download ─────────────────────────────────────────────
+        if out.exists() and out.stat().st_size > 0:
+            wlogger.debug(f"[CAM {cam_id}] {label} cached, skip download")
+        else:
+            async with _semaphore:
+                ok = await playback.async_download_clip(cam_id, c_start, c_end, out)
+            if not ok:
+                wlogger.error(f"[CAM {cam_id}] {label} download FAILED — bỏ qua chunk")
+                await set_cam_chunk_progress(cam_id, idx + 1, label, total)
                 continue
-
-            ok = await playback.async_download_clip(cam_id, c_start, c_end, out)
-            if ok:
-                results.append((out, c_start, c_end))
-            else:
-                wlogger.error(f"[CAM {cam_id}] {label} FAILED")
-
-    return results
-
-
+ 
+        await set_cam_chunk_progress(cam_id, idx + 1, label, total)
+ 
+        # ── Detect ngay (không block event loop) ─────────────────
+        await set_cam_detecting(cam_id)
+        saved = await process_video(
+            video_path   = out,
+            cam_id       = cam_id,
+            chunk_start  = c_start,
+            chunk_end    = c_end,
+            delete_after = True,   # xóa file ngay sau detect
+        )
+        total_saved += saved
+        wlogger.info(
+            f"[CAM {cam_id}] chunk {idx+1}/{total} {label} "
+            f"→ {saved} QR(s) | total={total_saved}"
+        )
+ 
+    return total_saved
+ 
+ 
+# ── Thay thế scan_date ────────────────────────────────────────────
+ 
 async def scan_date(
     cam_ids:      list[int],
     target_date:  datetime,
@@ -157,52 +306,44 @@ async def scan_date(
     end_minute:   int = 0,
     label:        str = "",
 ) -> int:
+    """
+    Chạy pipeline download→detect cho nhiều cam song song.
+    Mỗi cam chạy _download_detect_pipeline độc lập (gather).
+    Semaphore trong pipeline đảm bảo max SEMAPHORE_COUNT cam download cùng lúc.
+    """
     from shared.db import get_channel_map
     get_playback().cfg.channel_map = await get_channel_map()
     wlogger.info(f"Channel map: {get_playback().cfg.channel_map}")
+ 
     date_str = target_date.strftime("%Y-%m-%d")
     label    = label or f"scan {date_str} {start_hour:02d}:{start_minute:02d}–{end_hour:02d}:{end_minute:02d}"
-
+ 
     wlogger.info(f"=== [{label}] cams={cam_ids} ===")
     set_shift_started(label, date_str, cam_ids)
-
-    dl_tasks = [
-        _download_with_progress(
+ 
+    # Mỗi cam chạy pipeline độc lập — gather để các cam chạy song song
+    pipeline_tasks = [
+        _download_detect_pipeline(
             cam_id, target_date,
             start_hour, end_hour,
             start_minute, end_minute,
         )
         for cam_id in cam_ids
     ]
-    cam_results = await asyncio.gather(*dl_tasks, return_exceptions=True)
-
-    async def _detect_cam(cid, chunks):
-        n = 0
-        for (path, c_start, c_end) in chunks:
-            n += await process_video(path, cid, c_start, c_end)
-        set_cam_done(cid, n)
-        return n
-
-    detect_tasks = []
-    for cam_id, chunks in zip(cam_ids, cam_results):
-        if isinstance(chunks, Exception):
-            wlogger.error(f"[CAM {cam_id}] Download exception: {chunks}")
-            set_cam_error(cam_id, str(chunks))
-            continue
-        if not chunks:
-            wlogger.warning(f"[CAM {cam_id}] Không có chunk nào tải được")
-            set_cam_done(cam_id, 0)
-            continue
-        set_cam_detecting(cam_id)
-        detect_tasks.append(_detect_cam(cam_id, chunks))
-
-    results     = await asyncio.gather(*detect_tasks, return_exceptions=True)
-    total_scans = sum(r for r in results if isinstance(r, int))
-
+    results = await asyncio.gather(*pipeline_tasks, return_exceptions=True)
+ 
+    total_scans = 0
+    for cam_id, result in zip(cam_ids, results):
+        if isinstance(result, Exception):
+            wlogger.error(f"[CAM {cam_id}] Pipeline exception: {result}")
+            await set_cam_error(cam_id, str(result))
+        else:
+            total_scans += result
+            await set_cam_done(cam_id, result)
+ 
     set_shift_finished(total_scans)
     wlogger.info(f"=== [{label}] done | total_scans={total_scans} ===")
     return total_scans
-
 
 async def run_shift(shift_name: str):
     shift = next((s for s in SHIFTS if s.name == shift_name), None)
@@ -210,11 +351,25 @@ async def run_shift(shift_name: str):
         wlogger.error(f"Unknown shift: {shift_name}")
         return
 
+    # Query DB lấy cam active của ca này
+    pool = db.get_pool()
+    rows = await pool.fetch(
+        "SELECT id FROM cameras WHERE shift = $1 AND status = 'active'",
+        shift_name,
+    )
+    cam_ids = [r["id"] for r in rows]
+
+    if not cam_ids:
+        wlogger.warning(f"[{shift_name}] Không có camera active nào trong DB — bỏ qua")
+        return
+
+    wlogger.info(f"[{shift_name}] Camera active từ DB: {cam_ids}")
+
     yesterday = (datetime.now(TZ) - timedelta(days=1)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     await scan_date(
-        cam_ids     = shift.cam_ids,
+        cam_ids     = cam_ids,   # ← từ DB
         target_date = yesterday,
         start_hour  = shift.footage_start_hour,
         end_hour    = shift.footage_end_hour,
@@ -229,6 +384,15 @@ def _get_all_active_dirs() -> set:
         result.update(dirs)
     return result
 
+async def cleanup_old_scans():
+    cutoff = datetime.now(TZ) - timedelta(days=30)
+    pool = db.get_pool()
+    result = await pool.execute(
+        "DELETE FROM qr_scans WHERE detected_at < $1",
+        cutoff,
+    )
+    count = int(result.split()[-1]) if result else 0
+    wlogger.info(f"[cleanup] Đã xóa {count} QR scan cũ hơn 30 ngày (trước {cutoff.date()})")
 
 def _cleanup_empty_date_dirs(skip_dirs: set | None = None) -> int:
     """
@@ -258,7 +422,11 @@ def _cleanup_empty_date_dirs(skip_dirs: set | None = None) -> int:
             except Exception as e:
                 wlogger.warning(f"[Cleanup] Không thể xóa {date_dir}: {e}")
     return removed
-
+async def cleanup_empty_dirs():
+    """Job APScheduler — gọi _cleanup_empty_date_dirs không skip folder nào."""
+    active_dirs = {info["out_dir"] for info in _active_tasks.values() if "out_dir" in info}
+    removed = _cleanup_empty_date_dirs(skip_dirs=active_dirs)
+    wlogger.info(f"[cleanup] Scheduled cleanup: {removed} folder rỗng đã xóa")
 
 def _cleanup_stale_clips(max_age_hours: int = 2, skip_dirs: set | None = None) -> int:
     """
@@ -409,18 +577,28 @@ async def lifespan(app: FastAPI):
         )
         logger.info(
             f"Scheduled shift [{shift.name}] "
-            f"{shift.cron_hour:02d}:{shift.cron_minute:02d} ICT | cams={shift.cam_ids}"
+            f"{shift.cron_hour:02d}:{shift.cron_minute:02d} ICT"  # ← bỏ cam_ids, query lúc runtime
         )
 
     # Cleanup định kỳ: mỗi 30 phút — dọn folder rỗng + clip on-demand cũ > 2h
     # Chạy lúc :00 và :30 của mỗi giờ; bỏ qua folder đang được task active dùng
     scheduler.add_job(
-        run_periodic_cleanup,
+        # run_periodic_cleanup,
+        cleanup_old_scans,
         trigger=CronTrigger(minute="0,30", timezone=TZ),
         id="periodic_cleanup",
         misfire_grace_time=120,
         replace_existing=True,
     )
+    
+    scheduler.add_job(
+        cleanup_empty_dirs,
+        trigger=CronTrigger(hour=3, minute=5, timezone=TZ),
+        id="cleanup_empty_dirs",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    
     logger.info("Scheduled periodic cleanup every 30 minutes")
 
     scheduler.start()

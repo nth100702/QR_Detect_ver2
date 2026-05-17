@@ -56,13 +56,12 @@ class Shift:
     name:               str
     cron_hour:          int
     cron_minute:        int
-    cam_ids:            list[int]
     footage_start_hour: int = 8
     footage_end_hour:   int = 19
 
 SHIFTS: list[Shift] = [
-    Shift(name="morning", cron_hour=7,  cron_minute=0, cam_ids=[1, 2]),
-    Shift(name="night",   cron_hour=20, cron_minute=0, cam_ids=[6, 7, 8, 9, 10]),
+    Shift(name="morning", cron_hour=7,  cron_minute=0),
+    Shift(name="night",   cron_hour=20, cron_minute=0),
 ]
 
 CHUNK_MINUTES    = 5    # mỗi chunk playback
