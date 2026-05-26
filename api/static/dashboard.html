@@ -40,6 +40,7 @@ tailwind.config = {
   /* ── Badges (PenguinUI-style mono) ── */
   .badge { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; padding: 2px 7px; border-radius: 4px; font-weight: 600; letter-spacing: 0.04em; display: inline-flex; align-items: center; gap: 4px; }
   .badge-waiting     { background:#374151; color:#9ca3af; }
+  .badge-cancelled   { background:#3b2f00; color:#fbbf24; }
   .badge-downloading { background:#1e3a5f; color:#60a5fa; }
   .badge-detecting   { background:#431407; color:#fb923c; }
   .badge-done        { background:#14532d; color:#4ade80; }
@@ -77,7 +78,7 @@ tailwind.config = {
   .card { background: #ffffff; border: 1px solid #e5e7eb; }
 
   /* ── Inputs ── */
-  .inp { border-radius: 8px; padding: 8px 12px; font-size: 0.875rem; outline: none; transition: border 0.2s; font-family: 'Inter', sans-serif; width: 100%; }
+  .inp { border-radius: 8px; padding: 8px 12px; font-size: 0.875rem; outline: none; transition: border 0.2s; font-family: 'Inter', sans-serif; width: 100%; box-sizing: border-box; min-width: 0; }
   .dark .inp { background: #0f1117; border: 1px solid #374151; color: #f9fafb; }
   .inp { background: #fff; border: 1px solid #d1d5db; color: #111827; }
   .dark .inp:focus { border-color: #f97316; }
@@ -480,17 +481,17 @@ tailwind.config = {
 
     <!-- Search bar card -->
     <div class="card p-4 mb-4">
-      <div class="flex flex-col sm:flex-row flex-wrap gap-3 items-stretch sm:items-end">
-        <div class="flex-1 min-w-[200px]">
+      <div class="flex flex-col sm:flex-row sm:flex-wrap gap-3 items-stretch sm:items-end">
+        <div class="flex-1 min-w-0">
           <span class="label">Mã QR</span>
           <input x-model="qr.query" @keydown.enter="qr.search()"
                  class="inp" placeholder="SPXVN... (để trống = xem hôm nay)" />
         </div>
-        <div class="w-full sm:w-40">
+        <div class="min-w-0 sm:w-40">
           <span class="label">Ngày</span>
-          <input type="date" x-model="qr.date" class="inp w-full" />
+          <input type="date" x-model="qr.date" class="inp w-full min-w-0 max-w-full" />
         </div>
-        <div class="w-full sm:w-28">
+        <div class="min-w-0 sm:w-28">
           <span class="label">Số dòng</span>
           <select x-model="qr.limit" class="sel w-full">
             <option value="50">50</option>
@@ -702,7 +703,8 @@ tailwind.config = {
           <div class="text-xs dark:text-gray-400 text-gray-500 mt-1">Chờ trong queue</div>
         </div>
         <div class="dark:bg-gray-800/50 bg-gray-50 rounded-lg p-3 text-center">
-          <div class="text-2xl font-bold font-mono" x-text="workerData.shift ? workerData.shift.total_scans ?? '—' : '—'"></div>
+          <div class="text-2xl font-bold font-mono"
+               x-text="Object.values(workerData.jobs || {}).reduce((s,j) => s + (j.total_scans||0), 0) || '—'"></div>
           <div class="text-xs dark:text-gray-400 text-gray-500 mt-1">QR ghi DB</div>
         </div>
       </div>
@@ -847,79 +849,221 @@ tailwind.config = {
       </div>
     </div>
 
-    <!-- Shift info -->
-    <div class="mb-3">
-      <span class="text-sm font-semibold dark:text-gray-300 text-gray-700 flex items-center gap-2">
-        <svg class="icon-md"><use href="#icon-clipboard"/></svg>
-        Ca scan gần nhất
-      </span>
-    </div>
+    <!-- ── Job list: CRON ──────────────────────────────── -->
+    <!-- ── Macro: job card dùng chung cho cron và manual ── -->
+    <!-- Được gọi 2 lần bên dưới, khác nhau ở filter source -->
 
-    <div class="card p-4 mb-4" x-show="workerData.shift">
-      <div class="flex items-center justify-between">
-        <div>
-          <span class="text-sm font-semibold"
-                x-text="'Ca ' + (workerData.shift?.name?.toUpperCase() ?? '') + ' — ' + (workerData.shift?.target_date ?? '')"></span>
-          <div class="text-xs dark:text-gray-400 text-gray-500 mt-0.5"
-               x-text="'Bắt đầu: ' + (workerData.shift?.started_at ?? '') + (workerData.shift?.finished_at ? '  |  Kết thúc: ' + workerData.shift.finished_at : '')"></div>
-        </div>
-        <span class="badge" :class="'badge-' + (workerData.shift?.status ?? 'waiting')"
-              x-text="workerData.shift?.status?.toUpperCase()"></span>
-      </div>
-    </div>
-    <div class="card p-6 text-center dark:text-gray-500 text-gray-400 text-sm" x-show="!workerData.shift">
-      Worker chưa chạy ca nào.
-    </div>
-
-    <!-- Per-camera status (shift level) -->
-    <template x-if="workerData.cameras && Object.keys(workerData.cameras).length && workerData.shift">
-      <div>
-        <div class="mb-3">
-          <span class="text-sm font-semibold dark:text-gray-300 text-gray-700 flex items-center gap-2">
-            <svg class="icon-md"><use href="#icon-camera"/></svg>
-            Trạng thái camera (ca hiện tại)
-          </span>
+    <!-- CRON -->
+    <template x-if="Object.values(workerData.jobs || {}).filter(j => j.source === 'cron').length > 0">
+      <div class="mb-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold dark:text-gray-300 text-gray-700 flex items-center gap-2">
+              <svg class="icon-md text-blue-400"><use href="#icon-bolt"/></svg>
+              CRON Jobs
+            </span>
+            <span class="badge badge-downloading text-[10px]"
+                  x-text="Object.values(workerData.jobs||{}).filter(j=>j.source==='cron').length + ' job'"></span>
+          </div>
+          <!-- Xóa done cron -->
+          <button x-show="Object.values(workerData.jobs||{}).some(j=>j.source==='cron'&&(j.status==='done'||j.status==='error'||j.status==='cancelled'))"
+                  class="btn btn-secondary btn-sm"
+                  @click="workerAction('/worker/jobs/done', 'DELETE')">
+            <svg class="icon-xs"><use href="#icon-trash"/></svg>
+            Xóa done
+          </button>
         </div>
         <div class="space-y-3">
-          <template x-for="[camId, cam] in Object.entries(workerData.cameras)" :key="camId">
-            <div class="card p-4">
-              <div class="flex items-center justify-between mb-2">
-                <div class="flex items-center gap-3">
-                  <span class="font-mono font-semibold text-sm">CAM <span x-text="camId"></span></span>
-                  <span class="badge" :class="'badge-' + cam.status" x-text="cam.status.toUpperCase()"></span>
+          <template x-for="job in Object.values(workerData.jobs || {})
+              .filter(j => j.source === 'cron')
+              .sort((a,b) => (a.status==='running'?0:1)-(b.status==='running'?0:1) || (b.started_at||'').localeCompare(a.started_at||''))"
+            :key="job.job_id">
+            <div class="task-card p-4"
+                 :class="{'task-running':job.status==='running','task-done':job.status==='done','task-error':job.status==='error'}">
+              <!-- Header -->
+              <div class="flex items-start justify-between mb-2 gap-2">
+                <div class="flex flex-wrap items-center gap-2 min-w-0">
+                  <span class="badge badge-downloading text-[10px]">CRON</span>
+                  <span class="badge"
+                        :class="{'badge-running':job.status==='running','badge-done':job.status==='done','badge-error':job.status==='error','badge-waiting':job.status==='waiting','badge-cancelled':job.status==='cancelled'}"
+                        x-text="job.status.toUpperCase()"></span>
+                  <span class="font-semibold text-sm truncate" x-text="job.label"></span>
                 </div>
-                <span class="text-xs font-mono dark:text-gray-500 text-gray-400" x-text="cam.updated_at"></span>
+                <span class="text-xs font-mono dark:text-gray-500 text-gray-400 shrink-0" x-text="job.target_date"></span>
               </div>
-              <!-- Downloading progress -->
-              <div x-show="cam.status === 'downloading' && cam.chunks_total > 0">
-                <div class="flex justify-between text-xs dark:text-gray-400 text-gray-500 mb-1">
-                  <span x-text="'Chunk ' + cam.chunks_done + '/' + cam.chunks_total + (cam.current_chunk ? ' (' + cam.current_chunk + ')' : '')"></span>
-                  <span x-text="Math.round(cam.chunks_done / cam.chunks_total * 100) + '%'"></span>
+              <!-- Times + QR count -->
+              <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs dark:text-gray-400 text-gray-500 mb-3">
+                <span x-show="job.started_at" x-text="'Bắt đầu: ' + fmtVN(job.started_at)"></span>
+                <span x-show="job.finished_at" x-text="'Kết thúc: ' + fmtVN(job.finished_at)"></span>
+                <span x-show="job.status==='done'||job.total_scans>0" class="text-green-400 font-semibold"
+                      x-text="(job.total_scans||0) + ' QR'"></span>
+              </div>
+              <!-- Tiến độ cam tổng -->
+              <template x-if="job.cameras && Object.keys(job.cameras).length > 0">
+                <div x-data="{
+                  get camDone() { return Object.values(job.cameras).filter(c=>c.status==='done'||c.status==='error').length },
+                  get camTotal() { return Object.keys(job.cameras).length }
+                }">
+                  <div class="flex items-center justify-between text-xs dark:text-gray-400 text-gray-500 mb-1">
+                    <span x-text="'Cam ' + camDone + '/' + camTotal + ' hoàn tất'"></span>
+                    <span x-text="Math.round(camDone/camTotal*100) + '%'"></span>
+                  </div>
+                  <div class="prog-track mb-3">
+                    <div class="prog-fill" :style="'width:' + Math.round(camDone/camTotal*100) + '%'"></div>
+                  </div>
+                  <!-- Per-cam rows -->
+                  <div class="space-y-1.5">
+                    <template x-for="[camId, cam] in Object.entries(job.cameras)" :key="camId">
+                      <div class="flex items-center gap-2 text-xs">
+                        <span class="font-mono dark:text-gray-500 text-gray-400 w-14 shrink-0" x-text="'CAM ' + camId"></span>
+                        <span class="badge shrink-0" :class="'badge-'+(cam.status||'waiting')" x-text="(cam.status||'waiting').toUpperCase()"></span>
+                        <template x-if="cam.status==='downloading' && cam.chunks_total>0">
+                          <div class="flex-1 flex items-center gap-2">
+                            <div class="prog-track flex-1"><div class="prog-fill" :style="'width:'+Math.round(cam.chunks_done/cam.chunks_total*100)+'%'"></div></div>
+                            <span class="font-mono dark:text-gray-500 text-gray-400 shrink-0"
+                                  x-text="cam.chunks_done+'/'+cam.chunks_total+(cam.current_chunk?' · '+cam.current_chunk:'')"></span>
+                          </div>
+                        </template>
+                        <template x-if="cam.status==='detecting'">
+                          <div class="flex-1 flex items-center gap-2">
+                            <div class="prog-track flex-1"><div class="prog-fill" style="width:100%"></div></div>
+                            <span class="dark:text-gray-500 text-gray-400 shrink-0">Scan QR…</span>
+                          </div>
+                        </template>
+                        <span x-show="cam.status==='done'" class="text-green-400 flex-1 flex items-center gap-1">
+                          <svg class="icon-xs"><use href="#icon-check-circle"/></svg>
+                          <span x-text="(cam.scans_found||0)+' QR'"></span>
+                        </span>
+                        <span x-show="cam.status==='error'" class="text-red-400 flex-1 flex items-center gap-1">
+                          <svg class="icon-xs shrink-0"><use href="#icon-x-circle"/></svg>
+                          <span x-text="cam.current_chunk||'lỗi'" class="truncate"></span>
+                        </span>
+                        <span x-show="!cam.status||cam.status==='waiting'" class="dark:text-gray-500 text-gray-400 flex-1">Chờ…</span>
+                      </div>
+                    </template>
+                  </div>
                 </div>
-                <div class="prog-track"><div class="prog-fill" :style="'width:' + (cam.chunks_done / cam.chunks_total * 100) + '%'"></div></div>
-              </div>
-              <!-- Detecting -->
-              <div x-show="cam.status === 'detecting'">
-                <div class="text-xs dark:text-gray-400 text-gray-500 mb-1">Đang detect QR từ video...</div>
-                <div class="prog-track"><div class="prog-fill" style="width:100%"></div></div>
-              </div>
-              <!-- Done -->
-              <div x-show="cam.status === 'done'" class="text-xs text-green-400 flex items-center gap-1.5">
-                <svg class="icon-xs"><use href="#icon-check-circle"/></svg>
-                Hoàn tất — <span x-text="cam.scans_found"></span> QR tìm được
-              </div>
-              <!-- Error -->
-              <div x-show="cam.status === 'error'" class="text-xs text-red-400 flex items-center gap-1.5">
-                <svg class="icon-xs"><use href="#icon-x-circle"/></svg>
-                Lỗi: <span x-text="cam.current_chunk || 'unknown'"></span>
-              </div>
-              <!-- Waiting -->
-              <div x-show="cam.status === 'waiting'" class="text-xs dark:text-gray-500 text-gray-400">Đang chờ đến lượt download...</div>
+              </template>
             </div>
           </template>
         </div>
       </div>
     </template>
+
+    <!-- MANUAL -->
+    <template x-if="Object.values(workerData.jobs || {}).filter(j => j.source === 'manual').length > 0">
+      <div class="mb-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold dark:text-gray-300 text-gray-700 flex items-center gap-2">
+              <svg class="icon-md text-accent"><use href="#icon-cursor"/></svg>
+              Manual Jobs
+            </span>
+            <span class="badge badge-detecting text-[10px]"
+                  x-text="Object.values(workerData.jobs||{}).filter(j=>j.source==='manual').length + ' job'"></span>
+            <!-- Running counter -->
+            <span x-show="Object.values(workerData.jobs||{}).filter(j=>j.source==='manual'&&j.status==='running').length > 0"
+                  class="text-xs font-mono dark:text-gray-400 text-gray-500"
+                  x-text="Object.values(workerData.jobs||{}).filter(j=>j.source==='manual'&&j.status==='running').length + '/3 running'"></span>
+          </div>
+          <!-- Xóa done manual -->
+          <button x-show="Object.values(workerData.jobs||{}).some(j=>j.source==='manual'&&(j.status==='done'||j.status==='error'||j.status==='cancelled'))"
+                  class="btn btn-secondary btn-sm"
+                  @click="workerAction('/worker/jobs/done', 'DELETE')">
+            <svg class="icon-xs"><use href="#icon-trash"/></svg>
+            Xóa done
+          </button>
+        </div>
+        <div class="space-y-3">
+          <template x-for="job in Object.values(workerData.jobs || {})
+              .filter(j => j.source === 'manual')
+              .sort((a,b) => (a.status==='running'?0:1)-(b.status==='running'?0:1) || (b.started_at||'').localeCompare(a.started_at||''))"
+            :key="job.job_id">
+            <div class="task-card p-4"
+                 :class="{'task-running':job.status==='running','task-done':job.status==='done','task-error':job.status==='error'}">
+              <!-- Header -->
+              <div class="flex items-start justify-between mb-2 gap-2">
+                <div class="flex flex-wrap items-center gap-2 min-w-0">
+                  <span class="badge badge-detecting text-[10px]">MANUAL</span>
+                  <span class="badge"
+                        :class="{'badge-running':job.status==='running','badge-done':job.status==='done','badge-error':job.status==='error','badge-waiting':job.status==='waiting','badge-cancelled':job.status==='cancelled'}"
+                        x-text="job.status.toUpperCase()"></span>
+                  <span class="font-semibold text-sm truncate" x-text="job.label"></span>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="text-xs font-mono dark:text-gray-500 text-gray-400" x-text="job.target_date"></span>
+                  <button x-show="job.status==='running'"
+                          class="btn btn-danger btn-sm btn-icon" title="Cancel job này"
+                          @click="cancelJobById(job.job_id)">
+                    <svg class="icon-xs"><use href="#icon-stop-circle"/></svg>
+                  </button>
+                </div>
+              </div>
+              <!-- Times + QR count -->
+              <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs dark:text-gray-400 text-gray-500 mb-3">
+                <span x-show="job.started_at" x-text="'Bắt đầu: ' + fmtVN(job.started_at)"></span>
+                <span x-show="job.finished_at" x-text="'Kết thúc: ' + fmtVN(job.finished_at)"></span>
+                <span x-show="job.status==='done'||job.total_scans>0" class="text-green-400 font-semibold"
+                      x-text="(job.total_scans||0) + ' QR'"></span>
+              </div>
+              <!-- Tiến độ cam tổng -->
+              <template x-if="job.cameras && Object.keys(job.cameras).length > 0">
+                <div x-data="{
+                  get camDone() { return Object.values(job.cameras).filter(c=>c.status==='done'||c.status==='error').length },
+                  get camTotal() { return Object.keys(job.cameras).length }
+                }">
+                  <div class="flex items-center justify-between text-xs dark:text-gray-400 text-gray-500 mb-1">
+                    <span x-text="'Cam ' + camDone + '/' + camTotal + ' hoàn tất'"></span>
+                    <span x-text="Math.round(camDone/camTotal*100) + '%'"></span>
+                  </div>
+                  <div class="prog-track mb-3">
+                    <div class="prog-fill" :style="'width:' + Math.round(camDone/camTotal*100) + '%'"></div>
+                  </div>
+                  <!-- Per-cam rows -->
+                  <div class="space-y-1.5">
+                    <template x-for="[camId, cam] in Object.entries(job.cameras)" :key="camId">
+                      <div class="flex items-center gap-2 text-xs">
+                        <span class="font-mono dark:text-gray-500 text-gray-400 w-14 shrink-0" x-text="'CAM ' + camId"></span>
+                        <span class="badge shrink-0" :class="'badge-'+(cam.status||'waiting')" x-text="(cam.status||'waiting').toUpperCase()"></span>
+                        <template x-if="cam.status==='downloading' && cam.chunks_total>0">
+                          <div class="flex-1 flex items-center gap-2">
+                            <div class="prog-track flex-1"><div class="prog-fill" :style="'width:'+Math.round(cam.chunks_done/cam.chunks_total*100)+'%'"></div></div>
+                            <span class="font-mono dark:text-gray-500 text-gray-400 shrink-0"
+                                  x-text="cam.chunks_done+'/'+cam.chunks_total+(cam.current_chunk?' · '+cam.current_chunk:'')"></span>
+                          </div>
+                        </template>
+                        <template x-if="cam.status==='detecting'">
+                          <div class="flex-1 flex items-center gap-2">
+                            <div class="prog-track flex-1"><div class="prog-fill" style="width:100%"></div></div>
+                            <span class="dark:text-gray-500 text-gray-400 shrink-0">Scan QR…</span>
+                          </div>
+                        </template>
+                        <span x-show="cam.status==='done'" class="text-green-400 flex-1 flex items-center gap-1">
+                          <svg class="icon-xs"><use href="#icon-check-circle"/></svg>
+                          <span x-text="(cam.scans_found||0)+' QR'"></span>
+                        </span>
+                        <span x-show="cam.status==='error'" class="text-red-400 flex-1 flex items-center gap-1">
+                          <svg class="icon-xs shrink-0"><use href="#icon-x-circle"/></svg>
+                          <span x-text="cam.current_chunk||'lỗi'" class="truncate"></span>
+                        </span>
+                        <span x-show="!cam.status||cam.status==='waiting'" class="dark:text-gray-500 text-gray-400 flex-1">Chờ…</span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+
+    <!-- Empty state khi không có job nào -->
+    <div class="card p-8 text-center dark:text-gray-500 text-gray-400 text-sm"
+         x-show="Object.keys(workerData.jobs || {}).length === 0">
+      Chưa có job nào. Worker đang chờ lịch hoặc trigger thủ công.
+    </div>
+
   </div><!-- end page worker -->
 
   <!-- ══════════════════════════════════════════════
@@ -1098,42 +1242,52 @@ tailwind.config = {
       <div class="card p-5">
         <h3 class="font-semibold text-sm mb-4">Cấu hình scan</h3>
 
-        <!-- Camera selector -->
+        <!-- Camera selector — 1 cam = 1 job -->
         <div class="mb-4">
-          <div class="flex items-center justify-between mb-2">
-            <span class="label" style="margin-bottom:0">Chọn camera</span>
-            <div class="flex gap-2 text-xs">
-              <button class="text-accent hover:underline" @click="trig.selectAll()">Tất cả</button>
-              <span class="dark:text-gray-600 text-gray-300">|</span>
-              <button class="dark:text-gray-400 text-gray-500 hover:underline" @click="trig.selectedCams = []">Bỏ chọn</button>
-            </div>
-          </div>
-          <div class="dark:bg-gray-800/40 bg-gray-50 rounded-lg p-3 max-h-36 overflow-y-auto space-y-1.5">
+          <span class="label">Camera <span class="text-[10px] font-normal dark:text-gray-500 text-gray-400">(1 cam · 1 job)</span></span>
+          <select x-model.number="trig.selectedCam" class="sel w-full">
+            <option value="">— Chọn camera —</option>
             <template x-for="c in trig.cameras" :key="c.id">
-              <label class="flex items-center gap-2.5 cursor-pointer text-sm">
-                <input type="checkbox" class="cam-check" :value="c.id" x-model="trig.selectedCams" />
-                <span class="font-mono text-xs dark:text-gray-400 text-gray-500">CAM <span x-text="c.id"></span></span>
-                <span x-text="c.name"></span>
-                <span class="text-xs dark:text-gray-500 text-gray-400" x-text="'(ch' + c.nvr_channel + ')'"></span>
-              </label>
+              <option :value="c.id"
+                      x-text="'CAM ' + c.id + ' · ' + c.name + ' (ch' + c.nvr_channel + ')'"></option>
             </template>
-            <div x-show="trig.cameras.length === 0" class="text-xs dark:text-gray-500 text-gray-400">Không có camera active.</div>
-          </div>
+          </select>
+          <div x-show="trig.cameras.length === 0"
+               class="text-xs dark:text-gray-500 text-gray-400 mt-1">Không có camera active.</div>
+        </div>
+
+        <!-- Manual job limit indicator -->
+        <div class="mb-4">
+          <template x-if="trig.manualRunningCount() >= 3">
+            <div class="flex items-start gap-2 p-3 rounded-lg dark:bg-red-950/40 bg-red-50 border dark:border-red-900/40 border-red-200 text-xs dark:text-red-300 text-red-700">
+              <svg class="icon-sm shrink-0 mt-0.5"><use href="#icon-warning"/></svg>
+              <span>Đã đạt giới hạn <strong>3 manual job</strong> đang chạy. Chờ job xong hoặc cancel bớt trước khi trigger thêm.</span>
+            </div>
+          </template>
+          <template x-if="trig.manualRunningCount() > 0 && trig.manualRunningCount() < 3">
+            <div class="flex items-center gap-2 p-3 rounded-lg dark:bg-yellow-950/30 bg-yellow-50 border dark:border-yellow-900/30 border-yellow-200 text-xs dark:text-yellow-300 text-yellow-700">
+              <svg class="icon-sm shrink-0"><use href="#icon-info"/></svg>
+              <span>
+                <strong x-text="trig.manualRunningCount()"></strong>/3 manual job đang chạy.
+                Cron đang chạy đúng ngày/ca/cam thì manual sẽ tự chờ.
+              </span>
+            </div>
+          </template>
         </div>
 
         <!-- Date/time -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
-          <div>
+          <div class="min-w-0">
             <span class="label">Ngày footage</span>
-            <input type="date" x-model="trig.date" class="inp text-sm" />
+            <input type="date" x-model="trig.date" class="inp text-sm w-full min-w-0 max-w-full" />
           </div>
-          <div>
+          <div class="min-w-0">
             <span class="label">Từ giờ</span>
-            <input type="time" x-model="trig.startTime" class="inp text-sm" />
+            <input type="time" x-model="trig.startTime" class="inp text-sm w-full min-w-0 max-w-full" />
           </div>
-          <div>
+          <div class="min-w-0">
             <span class="label">Đến giờ</span>
-            <input type="time" x-model="trig.endTime" class="inp text-sm" />
+            <input type="time" x-model="trig.endTime" class="inp text-sm w-full min-w-0 max-w-full" />
           </div>
         </div>
 
@@ -1148,13 +1302,13 @@ tailwind.config = {
           <button class="btn btn-secondary btn-sm" @click="trig.preset(13,0,17,0)">Buổi chiều</button>
         </div>
 
-        <!-- Trigger button -->
+        <!-- Trigger button — block khi đủ 3 manual running -->
         <button class="btn btn-primary w-full" @click="trig.send()"
-                :disabled="trig.sending || trig.selectedCams.length === 0">
+                :disabled="trig.sending || !trig.selectedCam || trig.manualRunningCount() >= 3">
           <svg class="icon-sm" :class="trig.sending ? 'spin-icon' : ''">
             <use :href="trig.sending ? '#icon-arrow-path' : '#icon-rocket'"/>
           </svg>
-          <span x-text="trig.sending ? 'Đang gửi...' : 'Trigger Scan'"></span>
+          <span x-text="trig.sending ? 'Đang gửi...' : (trig.manualRunningCount() >= 3 ? 'Đạt giới hạn job' : 'Trigger Scan')"></span>
         </button>
       </div>
 
@@ -1192,11 +1346,14 @@ tailwind.config = {
                   </div>
                   <div class="text-xs dark:text-gray-400 text-gray-500 flex items-center gap-1.5">
                     <svg class="icon-xs"><use href="#icon-camera"/></svg>
-                    <span x-text="'Cam: ' + h.cam_ids.join(', ')"></span>
+                    <span x-text="'CAM ' + h.cam_id + (h.cam_name ? ' · ' + h.cam_name : '')"></span>
                   </div>
                 </div>
-                <!-- Retry button -->
-                <button class="btn btn-secondary btn-sm ml-2 shrink-0 btn-icon" @click="trig.retry(h)" title="Trigger lại">
+                <!-- Retry button — disabled khi đủ 3 manual running -->
+                <button class="btn btn-secondary btn-sm ml-2 shrink-0 btn-icon"
+                        @click="trig.retry(h)"
+                        :disabled="trig.manualRunningCount() >= 3"
+                        :title="trig.manualRunningCount() >= 3 ? 'Đạt giới hạn job' : 'Trigger lại'">
                   <svg class="icon-sm"><use href="#icon-retry"/></svg>
                 </button>
               </div>
@@ -1274,7 +1431,7 @@ function app() {
 
     // ── SSE ───────────────────────────────────────────────
     sseConnected: false,
-    workerData: { shift: null, cameras: {} },
+    workerData: { jobs: {} },
     queueInfo: { paused: false, active_tasks: 0, queue_pending: 0 },
     _sse: null,
     _justCancelled: false,
@@ -1286,18 +1443,20 @@ function app() {
       this._sse.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-          if (this._justCancelled) {
-            const hasActive = data.cameras && Object.values(data.cameras).some(
-              c => c.status === 'downloading' || c.status === 'detecting' || c.status === 'waiting'
-            );
-            if (!hasActive) data.cameras = {};
-            else this._justCancelled = false;
+          // Đọc jobs (cấu trúc mới)
+          if (data.jobs != null) {
+            // Merge SSE jobs vào local state — không overwrite job đã cancelled/done bởi UI
+            const current = this.workerData.jobs || {};
+            const merged  = { ...data.jobs };
+            for (const [id, job] of Object.entries(current)) {
+              const terminal = ['cancelled', 'done', 'error'];
+              // Nếu local đã terminal nhưng SSE vẫn báo running → giữ local
+              if (terminal.includes(job.status) && merged[id]?.status === 'running') {
+                merged[id] = job;
+              }
+            }
+            this.workerData = { jobs: merged };
           }
-          if (!this._justCancelled && data.cameras && Object.keys(data.cameras).length) {
-            const runningTask = this.activeTasks.find(t => t.status === 'running');
-            if (runningTask) runningTask.cameras = data.cameras;
-          }
-          this.workerData = data;
           if (data.queue != null) {
             this.queueInfo.queue_pending = data.queue.queue_pending ?? this.queueInfo.queue_pending;
             this.queueInfo.paused        = data.queue.paused        ?? this.queueInfo.paused;
@@ -1382,12 +1541,25 @@ function app() {
       } catch (e) { this.toast(e.message, '❌'); }
     },
 
-    async workerAction(endpoint) {
+    async cancelJobById(jobId) {
       try {
-        const r = await apiFetch(endpoint, { method: 'POST' });
-        this.toast(r.msg || 'OK', endpoint.includes('pause') ? '⏸️' : '▶️');
+        const r = await apiFetch('/scan/cancel/' + jobId, { method: 'POST' });
+        this.toast(r.msg || 'Đã cancel job', '🛑');
+        // Optimistic update ngay — SSE sẽ không overwrite lại nhờ merge logic
+        const jobs = this.workerData.jobs || {};
+        if (jobs[jobId]) {
+          jobs[jobId] = { ...jobs[jobId], status: 'cancelled' };
+          this.workerData = { ...this.workerData, jobs: { ...jobs } };
+        }
+      } catch (e) { this.toast(e.message, '❌'); }
+    },
+
+    async workerAction(endpoint, method = 'POST') {
+      try {
+        const r = await apiFetch(endpoint, { method });
+        this.toast(r.msg || 'OK', endpoint.includes('pause') ? '⏸️' : endpoint.includes('done') ? '🗑️' : '▶️');
         if (r.paused != null) this.queueInfo.paused = r.paused;
-        else this.queueInfo.paused = endpoint.includes('pause');
+        else if (method === 'POST') this.queueInfo.paused = endpoint.includes('pause');
       } catch (e) { this.toast(e.message, '❌'); }
     },
 
@@ -1551,30 +1723,34 @@ function app() {
 
     // ── Trigger ───────────────────────────────────────────
     trig: {
-      cameras: [], selectedCams: [],
+      cameras: [], selectedCam: '',
       date: new Date(Date.now() - 86400000).toISOString().slice(0,10),
       startTime: '08:00', endTime: '19:00',
       sending: false, history: [],
+
+      manualRunningCount() {
+        const jobs = window._app?.workerData?.jobs || {};
+        return Object.values(jobs).filter(j => j.source === 'manual' && j.status === 'running').length;
+      },
 
       async loadCams() {
         try {
           const d = await apiFetch('/cameras');
           this.cameras = d.data.filter(c => c.status === 'active');
-          this.selectedCams = this.cameras.map(c => c.id);
         } catch {}
       },
-      selectAll() { this.selectedCams = this.cameras.map(c => c.id); },
       preset(sh, sm, eh, em) {
         this.startTime = `${String(sh).padStart(2,'0')}:${String(sm).padStart(2,'0')}`;
         this.endTime   = `${String(eh).padStart(2,'0')}:${String(em).padStart(2,'0')}`;
       },
       async send() {
-        if (!this.selectedCams.length) { window._app?.toast('Chọn ít nhất 1 camera', '⚠️'); return; }
+        if (!this.selectedCam) { window._app?.toast('Chọn camera trước', '⚠️'); return; }
         if (this.startTime >= this.endTime) { window._app?.toast('Giờ bắt đầu phải trước giờ kết thúc', '⚠️'); return; }
+        if (this.manualRunningCount() >= 3) { window._app?.toast('Đã đạt giới hạn 3 manual job đang chạy', '⚠️'); return; }
         this.sending = true;
         try {
           const r = await apiFetch('/scan/trigger', { method: 'POST', body: JSON.stringify({
-            cam_ids: this.selectedCams.map(Number), date: this.date,
+            cam_ids: [Number(this.selectedCam)], date: this.date,
             start_time: this.startTime, end_time: this.endTime,
           })});
           if (r && r.job_id) window._app?.addActiveTask(r.job_id, {});
@@ -1582,18 +1758,22 @@ function app() {
             window._app.queueInfo.active_tasks  = r.active_tasks  ?? window._app.queueInfo.active_tasks;
             window._app.queueInfo.queue_pending = r.queue_pending ?? window._app.queueInfo.queue_pending;
           }
-          this.history.unshift({ cam_ids: [...this.selectedCams], date: this.date,
-            startTime: this.startTime, endTime: this.endTime,
-            sent_at: new Date().toLocaleTimeString('vi-VN') });
+          const camObj = this.cameras.find(c => c.id === Number(this.selectedCam));
+          this.history.unshift({
+            cam_id: this.selectedCam, cam_name: camObj?.name || '',
+            date: this.date, startTime: this.startTime, endTime: this.endTime,
+            sent_at: new Date().toLocaleTimeString('vi-VN'),
+          });
           window._app?.toast('Job đã gửi đến worker!', '✅');
           await window._app?.fetchQueueInfo();
         } catch (e) { window._app?.toast(e.message, '❌'); }
         finally { this.sending = false; }
       },
       async retry(h) {
+        if (this.manualRunningCount() >= 3) { window._app?.toast('Đã đạt giới hạn 3 manual job đang chạy', '⚠️'); return; }
         try {
           const r = await apiFetch('/scan/trigger', { method: 'POST', body: JSON.stringify({
-            cam_ids: h.cam_ids.map(Number), date: h.date,
+            cam_ids: [Number(h.cam_id)], date: h.date,
             start_time: h.startTime, end_time: h.endTime,
           })});
           if (r && r.job_id) window._app?.addActiveTask(r.job_id, {});
