@@ -17,6 +17,7 @@ Logic clip giữ lại từ server.py:
 import asyncio
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -53,51 +54,75 @@ def _detect_video(
     cam_id:     int,
     chunk_start: datetime,
     chunk_end:   datetime,
+    cancel_event: threading.Event | None = None,
 ) -> list[dict]:
     """
     Đọc video, detect QR theo sample fps, trả về list scan records.
     Chạy trong thread (blocking I/O + CPU).
+
+    Dùng grab() cho frame bỏ qua thay vì read() — duy trì HEVC decoder state,
+    tránh "Could not find ref with POC" warnings, nhanh ~5-10x so với read all.
     """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         logger.error(f"Cannot open video: {video_path}")
         return []
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    fps          = cap.get(cv2.CAP_PROP_FPS) or 25.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration_sec = total_frames / fps
 
-    # Bước nhảy frame để đạt DETECT_SAMPLE_FPS
-    step = max(1, int(fps / DETECT_SAMPLE_FPS))
+    # Bước nhảy frame: grab() các frame bỏ qua thay vì seek() —
+    # grab() advance vị trí mà không decode full, duy trì HEVC decoder state
+    # → không có "Could not find ref with POC" warnings, nhanh ~5-10x so với read all
+    step      = max(1, int(fps / DETECT_SAMPLE_FPS))
+    n_samples = max(1, int(total_frames / step))
 
     logger.info(
         f"[CAM {cam_id}] Detecting {video_path.name} | "
-        f"{fps:.1f}fps {duration_sec:.0f}s, sample every {step} frames"
+        f"{fps:.1f}fps {duration_sec:.0f}s → {n_samples} samples (grab-skip, step={step})"
     )
 
     scans:         list[dict] = []
-    seen_qrs:      dict[str, datetime] = {}   # qr_value → last_detected_at (dedup)
+    seen_qrs:      dict[str, datetime] = {}
     current_qr:    str | None = None
     clip_start_ts: datetime | None = None
 
     frame_idx = 0
+    sampled   = 0
+
     while True:
+        # Grab các frame cần bỏ qua (fast, không decode, giữ decoder state)
+        if frame_idx % step != 0:
+            if not cap.grab():
+                break
+            frame_idx += 1
+            continue
+
+        # Frame cần detect — decode đầy đủ
         ret, frame = cap.read()
         if not ret:
             break
 
-        frame_idx += 1
-        if frame_idx % step != 0:
-            continue
+        if cancel_event and cancel_event.is_set():
+            logger.warning(f"[CAM {cam_id}] _detect_video cancelled at frame {frame_idx}")
+            break
 
-        # Thời điểm tương ứng frame trong chunk
-        frame_sec   = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-        detected_at = chunk_start + timedelta(seconds=frame_sec)
+        sampled += 1
+        actual_msec = cap.get(cv2.CAP_PROP_POS_MSEC)
+        detected_at = chunk_start + timedelta(seconds=actual_msec / 1000.0)
+
+        # Resize xuống 720p nếu frame quá lớn — giảm thời gian pyzbar decode
+        h, w = frame.shape[:2]
+        if w > 1280:
+            scale = 1280.0 / w
+            frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
 
         try:
             results = decode(frame)
         except Exception as e:
-            logger.debug(f"[CAM {cam_id}] decode error frame {frame_idx}: {e}")
+            logger.debug(f"[CAM {cam_id}] decode error at frame {frame_idx}: {e}")
+            frame_idx += 1
             continue
 
         for obj in results:
@@ -109,11 +134,9 @@ def _detect_video(
             if not is_valid_qr(qr):
                 continue
 
-            # Dedup: bỏ qua nếu đã thấy QR này trong chunk này
             if qr in seen_qrs:
                 continue
 
-            # Logic switch clip: chỉ đổi QR khi clip hiện tại >= CLIP_MIN_DURATION
             if current_qr and current_qr != qr and clip_start_ts:
                 elapsed = (detected_at - clip_start_ts).total_seconds()
                 if elapsed < CLIP_MIN_DURATION:
@@ -146,8 +169,10 @@ def _detect_video(
                 f"{detected_at.strftime('%H:%M:%S')} ({shift})"
             )
 
+        frame_idx += 1
+
     cap.release()
-    logger.info(f"[CAM {cam_id}] {video_path.name} → {len(scans)} QR(s) found")
+    logger.info(f"[CAM {cam_id}] {video_path.name} → {len(scans)} QR(s) | {sampled} frames sampled")
     return scans
 
 

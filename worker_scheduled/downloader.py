@@ -73,3 +73,47 @@ async def download_cam_chunks(
         logger.info(f"[CAM {cam_id}] Released semaphore — {len(results)}/{len(chunks)} OK")
 
     return results
+
+
+async def download_full_day(
+    cam_ids:    list[int],
+    date:       datetime,
+    start_hour: int = 8,
+    end_hour:   int = 19,
+) -> dict[int, list[tuple[Path, datetime, datetime]]]:
+    """
+    Tải toàn bộ footage 8h–19h cho nhiều cam trong 1 ngày, chạy song song.
+    Trả về dict {cam_id: [(path, chunk_start, chunk_end), ...]} cho các chunk thành công.
+
+    Mỗi cam vẫn bị giới hạn bởi _semaphore (SEMAPHORE_COUNT) — các cam
+    chờ nhau thay vì kéo bandwidth cùng lúc.
+
+    Ví dụ:
+        results = await download_full_day([1, 2, 3], datetime(2025, 1, 15))
+        for cam_id, chunks in results.items():
+            print(f"CAM {cam_id}: {len(chunks)} chunks OK")
+    """
+    tasks = {
+        cam_id: asyncio.create_task(
+            download_cam_chunks(cam_id, date, start_hour, end_hour),
+            name=f"download_cam_{cam_id}",
+        )
+        for cam_id in cam_ids
+    }
+
+    results: dict[int, list[tuple[Path, datetime, datetime]]] = {}
+    for cam_id, task in tasks.items():
+        try:
+            results[cam_id] = await task
+        except Exception as e:
+            logger.error(f"[CAM {cam_id}] download_full_day error: {e}")
+            results[cam_id] = []
+
+    total_chunks  = sum(len(v) for v in results.values())
+    total_cameras = sum(1 for v in results.values() if v)
+    logger.info(
+        f"download_full_day done — "
+        f"{total_cameras}/{len(cam_ids)} cam(s) OK, "
+        f"{total_chunks} chunk(s) total"
+    )
+    return results

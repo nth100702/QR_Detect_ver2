@@ -174,9 +174,40 @@ def set_shift_finished(total_scans: int, job_id: str = ""):
     _write(data)
 
 
+def set_job_cancelled(job_id: str):
+    """
+    Đánh dấu job là cancelled trong state.
+    Gọi từ API cancel endpoint ngay sau khi cancel asyncio task.
+    """
+    data = _read()
+    job  = data.get("jobs", {}).get(job_id)
+    if job:
+        job.update(status="cancelled", finished_at=_now())
+        data["jobs"][job_id] = job
+        _cleanup_old_jobs(data)
+        _write(data)
+
+
 def read_state() -> dict:
     """
     Trả về toàn bộ state.
     Dashboard đọc data["jobs"] để hiển thị tất cả job đang/đã chạy.
     """
     return _read()
+
+def clear_done_jobs() -> int:
+    """
+    Xóa tất cả job status done/error/cancelled.
+    Job đang running không bị xóa.
+    Trả về số job đã xóa.
+    """
+    data = _read()
+    jobs = data.get("jobs", {})
+    to_remove = [
+        k for k, v in jobs.items()
+        if v.get("status") in ("done", "error", "cancelled")
+    ]
+    for k in to_remove:
+        del jobs[k]
+    _write(data)
+    return len(to_remove)

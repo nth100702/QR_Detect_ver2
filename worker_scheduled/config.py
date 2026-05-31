@@ -24,7 +24,7 @@ CHANNEL_MAP: dict[int, int] = {
     1: 1,
     5: 5,
 }
-
+DETECT_WORKERS = 6   # 8-core CPU: giữ 1 cho OS, 1 cho download/API
 # ── HCNetSDK ─────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parents[1]
 
@@ -65,7 +65,7 @@ SHIFTS: list[Shift] = [
 ]
 
 CHUNK_MINUTES    = 5    # mỗi chunk playback
-SEMAPHORE_COUNT  = 2    # số cam download song song
+SEMAPHORE_COUNT  = 6    # số cam download song song
 DETECT_SAMPLE_FPS = 1   # sample 1 fps khi detect QR
 
 # ── Thư mục tạm ──────────────────────────────────────────────────
@@ -82,3 +82,8 @@ QR_VALID_PREFIX  = "SPXVN"
 CLIP_MIN_DURATION = 30   # giây — switch QR chỉ khi clip hiện tại >= 30s
 
 API_SECRET = os.environ["API_SECRET"]
+VIEWER_SECRET = os.environ["VIEWER_SECRET"]
+NVR_CHANNELS       = 1    # NVR chỉ hỗ trợ 1 concurrent playback stream
+SEGMENT_HOURS      = 1    # 1h khớp NVR recording interval → không bị SDK split
+DETECT_WORKERS     = 6    # 8-core CPU: giữ 1 cho OS, 1 cho download/API
+DETECT_SAMPLE_FPS  = 0.5  # sample 1 frame mỗi 2 giây — QR stable vài giây, không bỏ sót

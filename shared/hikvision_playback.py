@@ -6,6 +6,7 @@ Cải tiến so với bản cũ:
   1. download_clip() poll NET_DVR_PlayBackGetPos thay vì sleep cố định
   2. Hỗ trợ asyncio qua asyncio.to_thread()
   3. NVRConfig đọc từ os.environ (không hardcode)
+  4. [FIX] cancel_event — dừng download giữa chừng, xóa file partial
 """
 
 import asyncio
@@ -47,8 +48,6 @@ logger.addHandler(_ch)
 # ─────────────────────────────────────────────
 # Load SDK
 # ─────────────────────────────────────────────
-# SDK_PATH = os.environ.get("HCNET_SDK_PATH", "./HCNetSDK.dll")
-
 try:
     sdk = ctypes.CDLL(SDK_PATH)
     logger.info(f"HCNetSDK loaded from {SDK_PATH}")
@@ -119,7 +118,6 @@ class NET_DVR_VOD_PARA(Structure):
 # ─────────────────────────────────────────────
 PLAY_START  = 1
 PLAY_STOP   = 2
-# PlayBackGetPos trả về 0–100 (%), 100 = hoàn tất, -1 = lỗi
 POS_DONE    = 100
 POS_ERROR   = -1
 
@@ -133,19 +131,11 @@ def _dt_to_sdk(dt: datetime) -> NET_DVR_TIME:
 
 @dataclass
 class NVRConfig:
-    """
-    Đọc config từ environment variables.
-    Fallback sang giá trị mặc định chỉ dùng khi dev/test.
-    """
     ip:          str  = field(default_factory=lambda: os.environ.get("NVR_HOST", ""))
     port:        int  = field(default_factory=lambda: int(os.environ.get("NVR_PORT", "8000")))
     username:    str  = field(default_factory=lambda: os.environ.get("NVR_USER", "trunghieu"))
     password:    str  = field(default_factory=lambda: os.environ.get("NVR_PASS", ""))
-    channel_map: dict = field(default_factory=dict)  # {cam_id (DB) → NVR channel}
-    # channel_map: dict = field(default_factory=lambda: {
-    # 1: 1,
-    # 5: 5,
-    # })
+    channel_map: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.ip:
@@ -158,30 +148,19 @@ class NVRConfig:
 # Core
 # ─────────────────────────────────────────────
 class HikvisionPlayback:
-    """
-    Quản lý kết nối NVR và tải playback clip.
-
-    Thread-safe: login/logout dùng lock riêng.
-    Mỗi download_clip() mở handle riêng, không share.
-    """
-
-    # Poll NET_DVR_PlayBackGetPos mỗi POLL_INTERVAL giây
-    POLL_INTERVAL_SEC  = 2
-    # Timeout tổng (giây) trước khi bỏ cuộc — 10 phút đủ cho clip 5 phút
+    POLL_INTERVAL_SEC   = 2
     DEFAULT_TIMEOUT_SEC = 600
-    # % tiến độ tối thiểu trong một chu kỳ STALL_WINDOW để coi là đang chạy
     STALL_THRESHOLD_PCT = 1
-    STALL_WINDOW_SEC    = 60   # nếu không tăng 1% trong 60s → stall
+    STALL_WINDOW_SEC    = 120
 
     def __init__(self, cfg: NVRConfig):
         if sdk is None:
             raise RuntimeError("HCNetSDK not loaded")
-        self.cfg    = cfg
-        self._lock  = threading.Lock()
-        self._uid   = -1
+        self.cfg         = cfg
+        self._login_lock = threading.Lock()   # [FIX #1] chỉ bảo vệ login/logout/_uid
+        self._uid        = -1
         self._init_sdk()
 
-    # ── SDK init ──────────────────────────────
     def _init_sdk(self):
         sdk.NET_DVR_Init()
         sdk.NET_DVR_SetConnectTime(2000, 1)
@@ -189,11 +168,9 @@ class HikvisionPlayback:
         logger.info("HCNetSDK initialized")
 
     def login(self, force: bool = False) -> bool:
-        with self._lock:
+        with self._login_lock:   # [FIX #1]
             if self._uid >= 0 and not force:
                 return True
-
-            # Force re-login: logout session cũ trước
             if self._uid >= 0 and force:
                 logger.info(f"Force re-login — logout uid={self._uid} trước")
                 sdk.NET_DVR_Logout(self._uid)
@@ -225,7 +202,7 @@ class HikvisionPlayback:
             return True
 
     def logout(self):
-        with self._lock:
+        with self._login_lock:   # [FIX #1]
             if self._uid >= 0:
                 sdk.NET_DVR_Logout(self._uid)
                 logger.info(f"NVR logout — uid={self._uid}")
@@ -236,31 +213,31 @@ class HikvisionPlayback:
     # ── Download (blocking, dùng trong thread) ──
     def download_clip(
         self,
-        cam_id:      int,
-        start_dt:    datetime,
-        stop_dt:     datetime,
-        output_path: str | Path,
-        timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+        cam_id:       int,
+        start_dt:     datetime,
+        stop_dt:      datetime,
+        output_path:  str | Path,
+        timeout_sec:  int = DEFAULT_TIMEOUT_SEC,
+        cancel_event: threading.Event | None = None,   # [FIX] thêm cancel_event
     ) -> bool:
         """
         Tải clip từ NVR về output_path.
 
-        Dùng NET_DVR_PlayBackGetPos để poll tiến độ thực sự thay vì sleep cố định.
-        Trả về True khi hoàn tất, False nếu lỗi / timeout / stall.
-
-        Parameters
-        ----------
-        cam_id      : ID trong DB — map sang NVR channel qua cfg.channel_map
-        start_dt    : thời điểm bắt đầu clip
-        stop_dt     : thời điểm kết thúc clip
-        output_path : đường dẫn file .mp4 đầu ra
-        timeout_sec : giới hạn thời gian chờ tổng
+        [FIX] cancel_event: nếu được set trong lúc đang poll tiến độ,
+        download sẽ dừng ngay trong vòng POLL_INTERVAL_SEC (tối đa 2s),
+        đóng handle SDK, xóa file partial.
         """
         t0 = time.monotonic()
+        output_path = Path(output_path)
         logger.info(
             f"[CAM {cam_id}] download_clip | "
             f"{start_dt.strftime('%Y-%m-%d %H:%M:%S')} → {stop_dt.strftime('%H:%M:%S')}"
         )
+
+        # [FIX] Cancel check trước khi bắt đầu — tránh mở handle không cần thiết
+        if cancel_event and cancel_event.is_set():
+            logger.info(f"[CAM {cam_id}] download_clip cancelled before start")
+            return False
 
         if not self.login():
             logger.error(f"[CAM {cam_id}] Abort — NVR not logged in")
@@ -282,12 +259,14 @@ class HikvisionPlayback:
         vod.hWnd                 = None
 
         # ── Open playback handle ──
+        # [FIX #1] Chỉ cần đọc _uid dưới lock, không lock toàn bộ API call
         sdk.NET_DVR_PlayBackByTime_V40.restype  = c_long
         sdk.NET_DVR_PlayBackByTime_V40.argtypes = [c_long, POINTER(NET_DVR_VOD_PARA)]
 
-        with self._lock:
-            logger.debug(f"[CAM {cam_id}] PlayBackByTime_V40 — uid={self._uid}, channel={channel}")
-            handle = sdk.NET_DVR_PlayBackByTime_V40(self._uid, byref(vod))
+        with self._login_lock:
+            uid_snapshot = self._uid
+        logger.debug(f"[CAM {cam_id}] PlayBackByTime_V40 — uid={uid_snapshot}, channel={channel}")
+        handle = sdk.NET_DVR_PlayBackByTime_V40(uid_snapshot, byref(vod))
 
         if handle <= 0:
             err = sdk.NET_DVR_GetLastError()
@@ -295,12 +274,12 @@ class HikvisionPlayback:
                 f"[CAM {cam_id}] PlayBackByTime_V40 FAILED — "
                 f"handle={handle}, SDK error: {err} — thử re-login..."
             )
-            # Session NVR có thể đã expire → force re-login rồi thử lại 1 lần
             if not self.login(force=True):
                 logger.error(f"[CAM {cam_id}] Re-login FAILED — abort")
                 return False
-            with self._lock:
-                handle = sdk.NET_DVR_PlayBackByTime_V40(self._uid, byref(vod))
+            with self._login_lock:
+                uid_snapshot = self._uid
+            handle = sdk.NET_DVR_PlayBackByTime_V40(uid_snapshot, byref(vod))
             if handle <= 0:
                 err = sdk.NET_DVR_GetLastError()
                 logger.error(
@@ -341,16 +320,25 @@ class HikvisionPlayback:
         logger.info(f"[CAM {cam_id}] Playback started → {output_path}")
 
         # ── Poll tiến độ ──
-        # sdk.NET_DVR_PlayBackGetPos.restype  = c_int
-        # sdk.NET_DVR_PlayBackGetPos.argtypes = [c_long]
         sdk.NET_DVR_GetDownloadPos.restype  = c_int
         sdk.NET_DVR_GetDownloadPos.argtypes = [c_long]
 
-        last_pct        = 0
-        stall_since     = time.monotonic()
-        success         = False
+        t0          = time.monotonic()   # [FIX #2] khởi tạo t0 trước vòng lặp
+        last_pct    = 0
+        stall_since = time.monotonic()
+        success     = False
+        cancelled   = False
 
         while True:
+            # [FIX] Cancel check mỗi vòng poll — overhead negligible (poll 2s/lần)
+            if cancel_event and cancel_event.is_set():
+                logger.info(
+                    f"[CAM {cam_id}] download_clip cancelled at {last_pct}% "
+                    f"— stopping playback"
+                )
+                cancelled = True
+                break
+
             elapsed = time.monotonic() - t0
             if elapsed > timeout_sec:
                 logger.error(
@@ -359,7 +347,6 @@ class HikvisionPlayback:
                 )
                 break
 
-            # pct = sdk.NET_DVR_PlayBackGetPos(handle)
             pct = sdk.NET_DVR_GetDownloadPos(handle)
 
             if pct == POS_ERROR:
@@ -372,7 +359,6 @@ class HikvisionPlayback:
                 last_pct    = pct
                 stall_since = time.monotonic()
 
-            # Kiểm tra stall
             if (time.monotonic() - stall_since) > self.STALL_WINDOW_SEC and pct < POS_DONE:
                 logger.error(
                     f"[CAM {cam_id}] Stall detected — stuck at {pct}% "
@@ -390,26 +376,54 @@ class HikvisionPlayback:
 
             time.sleep(self.POLL_INTERVAL_SEC)
 
-        # ── Cleanup ──
+        # ── Cleanup SDK handle ──
         sdk.NET_DVR_StopPlayBack(handle)
+
+        if success:
+            prev_size = -1
+            for _ in range(10):
+                time.sleep(1)
+                cur_size = output_path.stat().st_size if output_path.exists() else 0
+                if cur_size == prev_size and cur_size > 0:
+                    break
+                prev_size = cur_size
+            else:
+                logger.warning(
+                    f"[CAM {cam_id}] File chưa flush sau 10s "
+                    f"— size={prev_size // 1024 // 1024}MB → coi như fail"
+                )
+                success = False
+        # [FIX] Xóa file partial nếu bị cancel hoặc lỗi (không để file rác)
+        if cancelled or not success:
+            try:
+                output_path.unlink(missing_ok=True)
+                if cancelled:
+                    logger.info(f"[CAM {cam_id}] Deleted partial file after cancel: {output_path}")
+                else:
+                    logger.debug(f"[CAM {cam_id}] Deleted partial file after error: {output_path}")
+            except Exception as e:
+                logger.warning(f"[CAM {cam_id}] Cannot delete partial file {output_path}: {e}")
+
         return success
 
     # ── Async wrapper (dùng trong asyncio pipeline) ──
     async def async_download_clip(
         self,
-        cam_id:      int,
-        start_dt:    datetime,
-        stop_dt:     datetime,
-        output_path: str | Path,
-        timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+        cam_id:       int,
+        start_dt:     datetime,
+        stop_dt:      datetime,
+        output_path:  str | Path,
+        timeout_sec:  int = DEFAULT_TIMEOUT_SEC,
+        cancel_event: threading.Event | None = None,   # [FIX] thêm cancel_event
     ) -> bool:
         """
         Async wrapper — chạy download_clip() trong thread pool.
-        Không block event loop, không chiếm asyncio semaphore trong lúc sleep.
+        [FIX] Truyền cancel_event vào thread để dừng download giữa chừng.
         """
         return await asyncio.to_thread(
             self.download_clip,
             cam_id, start_dt, stop_dt, output_path, timeout_sec,
+            cancel_event,   # [FIX]
         )
 
 
@@ -427,14 +441,13 @@ async def init_playback(cfg: NVRConfig | None = None):
         cfg = NVRConfig()
 
     cfg.channel_map = await get_channel_map()
-    logger.info(f"channel_map loaded from DB: {cfg.channel_map}")  # ← xem log này ra gì
+    logger.info(f"channel_map loaded from DB: {cfg.channel_map}")
 
     _playback_instance = HikvisionPlayback(cfg)
     _playback_instance.login()
 
 
 async def refresh_channel_map():
-    """Gọi sau khi thêm/sửa/xóa camera — không cần restart."""
     if _playback_instance is None:
         return
     from shared.db import get_channel_map
@@ -445,5 +458,5 @@ async def refresh_channel_map():
 def get_playback() -> HikvisionPlayback:
     if _playback_instance is None:
         raise RuntimeError("Playback not initialized. Call init_playback() first.")
-    logger.info(f"current channel_map: {_playback_instance.cfg.channel_map}")  # ← thêm dòng này
+    logger.info(f"current channel_map: {_playback_instance.cfg.channel_map}")
     return _playback_instance

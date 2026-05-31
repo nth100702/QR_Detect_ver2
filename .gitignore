@@ -12,3 +12,5 @@ temp_clips/
 temp_videos/
 *.json
 test_run.py
+test_nvr_concurrency.py
+benchmark_test.py

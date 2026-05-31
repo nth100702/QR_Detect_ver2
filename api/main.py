@@ -13,6 +13,7 @@ Redis là OPTIONAL:
 """
 
 import asyncio
+from asyncio import subprocess
 import json
 import logging
 import logging.handlers
@@ -23,6 +24,7 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Optional
+from pathlib import Path
 
 import pytz
 import redis.asyncio as aioredis
@@ -40,8 +42,8 @@ from shared import db
 from shared.hikvision_playback import init_playback, get_playback
 from shared.models import QrScan
 from worker_scheduled.config import (
-    API_SECRET, REDIS_URL, API_HOST, API_PORT, LOG_DIR,
-    SHIFTS, CHUNK_MINUTES, TEMP_VIDEO_DIR, TEMP_CLIP_DIR,
+    API_SECRET, VIEWER_SECRET, REDIS_URL, API_HOST, API_PORT, LOG_DIR,
+    SHIFTS, CHUNK_MINUTES, TEMP_VIDEO_DIR, TEMP_CLIP_DIR, NVR_CHANNELS, SEGMENT_HOURS
 )
 from worker_scheduled.downloader import download_cam_chunks, chunk_ranges
 from worker_scheduled.detector import process_video
@@ -74,9 +76,23 @@ STATUS_TTL = 3600
 # ── Auth ─────────────────────────────────────────────────────────
 _api_key_header = APIKeyHeader(name="X-Secret", auto_error=True)
 
+def _resolve_role(key: str) -> str:
+    """Trả về admin | viewer | raises 401."""
+    if key == API_SECRET:
+        return "admin"
+    if key == VIEWER_SECRET:
+        return "viewer"
+    raise HTTPException(status_code=401, detail="Invalid API secret")
+
 def verify_secret(key: str = Security(_api_key_header)):
-    if key != API_SECRET:
-        raise HTTPException(status_code=401, detail="Invalid API secret")
+    """Cho phép cả admin lẫn viewer (GET endpoints)."""
+    _resolve_role(key)
+    return key
+
+def verify_admin(key: str = Security(_api_key_header)):
+    """Chỉ cho phép admin (POST/DELETE/trigger)."""
+    if _resolve_role(key) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
     return key
 
 # ── Redis helper ─────────────────────────────────────────────────
@@ -227,7 +243,220 @@ def get_scan_trigger_queue() -> asyncio.Queue:
 #     set_shift_finished(total_scans)
 #     wlogger.info(f"=== [{label}] done | total_scans={total_scans} ===")
 #     return total_scans
+async def download_full_clip(
+    cam_id: int,
+    date: datetime,
+    start_hour: int,
+    end_hour: int,
+):
+    from shared.hikvision_playback import get_playback
+    from worker_scheduled.config import SEMAPHORE_COUNT
+    footage_start = date.replace(
+        hour=start_hour,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
 
+    footage_end = date.replace(
+        hour=end_hour,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+
+    out_dir = TEMP_VIDEO_DIR / str(cam_id) / date.strftime("%Y%m%d")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out = out_dir / "full.mp4"
+
+    playback = get_playback()
+    _semaphore = asyncio.Semaphore(SEMAPHORE_COUNT)
+    async with _semaphore:
+        logger.info(
+            f"[CAM {cam_id}] FULL DOWNLOAD "
+            f"{footage_start:%H:%M} -> {footage_end:%H:%M}"
+        )
+
+        ok = await playback.async_download_clip(
+            cam_id,
+            footage_start,
+            footage_end,
+            out,
+        )
+
+    if not ok:
+        logger.error(f"[CAM {cam_id}] FULL DOWNLOAD FAILED")
+        return None
+
+    logger.info(
+        f"[CAM {cam_id}] FULL DOWNLOAD OK "
+        f"({out.stat().st_size // 1024} KB)"
+    )
+
+    return out
+
+# async def _download_detect_pipeline(
+#     cam_id:       int,
+#     date:         datetime,
+#     start_hour:   int,
+#     end_hour:     int,
+#     start_minute: int = 0,
+#     end_minute:   int = 0,
+#     job_id:       str = "",
+# ) -> int:
+#     """
+#     Pipeline download → detect song song dùng producer/consumer queue.
+
+#     Thay vì: [dl1][det1][dl2][det2]...  (tuần tự, lãng phí NVR slot khi detect)
+#     Thành:   [dl1][dl2][dl3]...          (producer liên tục download)
+#                   [det1][det2][det3]...  (DETECT_WORKERS consumer detect song song)
+
+#     - Producer: download từng chunk, đẩy vào queue (maxsize=DETECT_WORKERS+2 để buffer nhỏ)
+#     - Consumer pool: DETECT_WORKERS coroutine chạy detect song song qua ThreadPoolExecutor
+#     - Lock per (cam_id, date): tránh conflict khi cron và manual trigger trùng cam+ngày
+#     """
+#     from worker_scheduled.downloader import _semaphore, chunk_ranges
+#     from worker_scheduled.config import DETECT_WORKERS
+#     from shared.hikvision_playback import get_playback
+#     from concurrent.futures import ThreadPoolExecutor
+
+#     lock_key = f"{cam_id}_{date.strftime('%Y%m%d')}"
+#     if lock_key not in _cam_locks:
+#         _cam_locks[lock_key] = asyncio.Lock()
+
+#     async with _cam_locks[lock_key]:
+#         wlogger.info(f"[CAM {cam_id}] Lock acquired: {lock_key} (job={job_id})")
+
+#         footage_start = TZ.normalize(
+#             date.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+#         )
+#         footage_end = TZ.normalize(
+#             date.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+#         )
+#         chunks    = chunk_ranges(footage_start, footage_end)
+#         total     = len(chunks)
+#         out_dir   = TEMP_VIDEO_DIR / str(cam_id) / date.strftime("%Y%m%d")
+#         out_dir.mkdir(parents=True, exist_ok=True)
+
+#         task_name = asyncio.current_task().get_name() if asyncio.current_task() else "_scheduler"
+#         _active_dirs.setdefault(task_name, set()).add(out_dir)
+
+#         def _is_cancelled() -> bool:
+#             ev = _cancel_events.get(task_name)
+#             return ev is not None and ev.is_set()
+
+#         set_cam_downloading(cam_id, total, job_id=job_id)
+#         playback    = get_playback()
+#         total_saved = 0
+#         saved_lock  = asyncio.Lock()
+
+#         # Queue buffer nhỏ — tránh download quá nhiều trước khi detect kịp
+#         # maxsize = DETECT_WORKERS + 2: luôn có sẵn chunk cho consumer mà không tốn disk
+#         dl_queue: asyncio.Queue = asyncio.Queue(maxsize=DETECT_WORKERS + 2)
+
+#         # ── Producer: download tuần tự, đẩy chunk vào queue ──────
+#         async def _producer():
+#             for idx, (c_start, c_end) in enumerate(chunks):
+#                 if _is_cancelled():
+#                     wlogger.warning(f"[CAM {cam_id}] Producer cancelled tại chunk {idx+1}/{total}")
+#                     break
+
+#                 label = f"{c_start:%H:%M}–{c_end:%H:%M}"
+#                 out   = out_dir / f"chunk_{c_start:%H%M}.mp4"
+
+#                 if out.exists() and out.stat().st_size > 0:
+#                     wlogger.debug(f"[CAM {cam_id}] {label} cached, skip download")
+#                 else:
+#                     async with _semaphore:
+#                         ok = await playback.async_download_clip(
+#                             cam_id, c_start, c_end, out,
+#                             cancel_event=_cancel_events.get(task_name),
+#                         )
+#                     if not ok:
+#                         wlogger.error(f"[CAM {cam_id}] {label} download FAILED — bỏ qua")
+#                         await set_cam_chunk_progress(cam_id, idx + 1, label, total, job_id=job_id)
+#                         continue
+
+#                 await set_cam_chunk_progress(cam_id, idx + 1, label, total, job_id=job_id)
+
+#                 if _is_cancelled():
+#                     wlogger.warning(f"[CAM {cam_id}] Producer cancelled sau download {label}")
+#                     break
+
+#                 # Đẩy vào queue — sẽ block nếu queue đầy (consumer chưa kịp detect)
+#                 await dl_queue.put((out, c_start, c_end, idx))
+
+#             # Gửi sentinel cho từng consumer để báo hết chunk
+#             for _ in range(DETECT_WORKERS):
+#                 await dl_queue.put(None)
+
+#         # ── Consumer: nhận chunk từ queue, detect song song ───────
+#         executor = ThreadPoolExecutor(
+#             max_workers=DETECT_WORKERS,
+#             thread_name_prefix=f"detect_cam{cam_id}",
+#         )
+
+#         async def _consumer(worker_id: int):
+#             nonlocal total_saved
+#             while True:
+#                 item = await dl_queue.get()
+#                 if item is None:
+#                     dl_queue.task_done()
+#                     break
+
+#                 out, c_start, c_end, idx = item
+#                 label = f"{c_start:%H:%M}–{c_end:%H:%M}"
+
+#                 if _is_cancelled():
+#                     # Xóa file nếu bị cancel
+#                     try:
+#                         out.unlink(missing_ok=True)
+#                     except Exception:
+#                         pass
+#                     dl_queue.task_done()
+#                     wlogger.warning(f"[CAM {cam_id}] Consumer-{worker_id} cancelled tại {label}")
+#                     break
+
+#                 await set_cam_detecting(cam_id, job_id=job_id)
+
+#                 loop  = asyncio.get_event_loop()
+#                 saved = await loop.run_in_executor(
+#                     executor,
+#                     lambda o=out, cs=c_start, ce=c_end: __import__(
+#                         "worker_scheduled.detector", fromlist=["_detect_video"]
+#                     )._detect_video(
+#                         o, cam_id, cs, ce,
+#                         cancel_event=_cancel_events.get(task_name),
+#                         delete_after=True,
+#                     ),
+#                 )
+
+#                 # POST kết quả
+#                 from worker_scheduled.detector import _post_scan
+#                 n = 0
+#                 for scan in saved:
+#                     ok = await _post_scan(cam_id, scan)
+#                     if ok:
+#                         n += 1
+
+#                 async with saved_lock:
+#                     total_saved += n
+
+#                 wlogger.info(
+#                     f"[CAM {cam_id}] worker-{worker_id} chunk {idx+1}/{total} {label} "
+#                     f"→ {n} QR(s) | total={total_saved} (job={job_id})"
+#                 )
+#                 dl_queue.task_done()
+
+#         # ── Chạy producer + consumers song song ──────────────────
+#         await set_cam_detecting(cam_id, job_id=job_id)
+#         consumers = [_consumer(i) for i in range(DETECT_WORKERS)]
+#         await asyncio.gather(_producer(), *consumers)
+#         executor.shutdown(wait=False)
+
+#         wlogger.info(f"[CAM {cam_id}] Lock released: {lock_key} (job={job_id})")
+#         return total_saved
 async def _download_detect_pipeline(
     cam_id:       int,
     date:         datetime,
@@ -324,10 +553,275 @@ async def _download_detect_pipeline(
  
         wlogger.info(f"[CAM {cam_id}] Lock released: {lock_key} (job={job_id})")
         return total_saved
- 
+import subprocess as _subprocess
+import re as _re
 
-# ── Thay thế scan_date ────────────────────────────────────────────
- 
+def _collect_split_parts(base_path: Path) -> list[Path]:
+    """
+    HCNetSDK tự động tạo thêm _1, _2, ... khi recording vượt NVR segment
+    boundary hoặc giới hạn 1 GB. Hàm này collect tất cả parts theo đúng thứ tự.
+    Ví dụ: seg_0800_1200.mp4, seg_0800_1200_1.mp4, seg_0800_1200_2.mp4
+    """
+    stem   = base_path.stem
+    parent = base_path.parent
+    pat    = _re.compile(rf"^{_re.escape(stem)}(_\d+)?\.mp4$")
+    return sorted(
+        p for p in parent.iterdir()
+        if p.is_file() and pat.match(p.name)
+    )
+
+def _is_valid_mp4(path: Path, expected_minutes: float, tolerance: float = 0.85) -> bool:
+    try:
+        r = _subprocess.run(
+            ["ffprobe", "-v", "error",
+             "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1",
+             str(path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode != 0:
+            return False
+        actual_sec   = float(r.stdout.strip())
+        expected_sec = expected_minutes * 60
+        ratio        = actual_sec / expected_sec
+        if ratio < tolerance:
+            wlogger.warning(
+                f"[VALIDATE] {path.name} {actual_sec:.0f}s / {expected_sec:.0f}s "
+                f"= {ratio:.0%} < {tolerance:.0%} → reject"
+            )
+            return False
+        return True
+    except Exception as e:
+        wlogger.warning(f"[VALIDATE] ffprobe error {path}: {e}")
+        return False
+
+
+async def scan_date_bulk(
+    cam_ids:       list[int],
+    target_date:   datetime,
+    start_hour:    int,
+    end_hour:      int,
+    start_minute:  int = 0,
+    end_minute:    int = 0,
+    job_id:        str = "",
+    nvr_channels:  int = NVR_CHANNELS,
+    segment_hours: int = SEGMENT_HOURS,
+) -> int:
+    from shared.hikvision_playback import get_playback
+    from worker_scheduled.detector import _detect_video, _post_scan
+    from worker_scheduled.config import DETECT_WORKERS
+    from concurrent.futures import ThreadPoolExecutor
+
+    playback  = get_playback()
+    task_name = asyncio.current_task().get_name() if asyncio.current_task() else "_scheduler"
+
+    # ── Tạo danh sách segment jobs theo round-robin ─────────────────
+    # Round-robin: seg0 của tất cả cam, rồi seg1, rồi seg2, ...
+    # Tránh 2 worker cùng tải cùng channel (NVR reject concurrent request
+    # cho cùng 1 channel — dẫn đến download fail im lặng).
+    #
+    # Thứ tự cam-by-cam:    cam2-s0, cam2-s1, cam1-s0, cam1-s1
+    # Thứ tự round-robin:   cam2-s0, cam1-s0, cam2-s1, cam1-s1  ← đúng
+    from itertools import zip_longest
+
+    seg_start_base = TZ.normalize(
+        target_date.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+    )
+    seg_end_total = TZ.normalize(
+        target_date.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+    )
+
+    per_cam_jobs: list[list] = []
+    for cam_id in cam_ids:
+        out_dir = TEMP_VIDEO_DIR / str(cam_id) / target_date.strftime("%Y%m%d")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _active_dirs.setdefault(task_name, set()).add(out_dir)
+
+        cam_jobs = []
+        cursor = seg_start_base
+        while cursor < seg_end_total:
+            seg_end = min(cursor + timedelta(hours=segment_hours), seg_end_total)
+            out = out_dir / f"seg_{cursor:%H%M}_{seg_end:%H%M}.mp4"
+            cam_jobs.append((cam_id, cursor, seg_end, out))
+            cursor = seg_end
+        per_cam_jobs.append(cam_jobs)
+
+    # Interleave: [cam2-s0, cam1-s0, cam2-s1, cam1-s1, ...]
+    all_jobs = [
+        job
+        for slot in zip_longest(*per_cam_jobs)
+        for job in slot
+        if job is not None
+    ]
+
+    total_jobs = len(all_jobs)
+    wlogger.info(
+        f"[bulk] {len(cam_ids)} cam → {total_jobs} segment jobs | "
+        f"nvr_channels={nvr_channels} detect_workers={DETECT_WORKERS} job_id={job_id}"
+    )
+    set_shift_started(f"bulk {target_date:%Y-%m-%d}", target_date.strftime("%Y-%m-%d"), cam_ids, job_id=job_id)
+
+    # ── Queues ──────────────────────────────────────────────────────
+    dl_queue:     asyncio.Queue = asyncio.Queue()
+    detect_queue: asyncio.Queue = asyncio.Queue()  # unlimited — split parts có thể > total_jobs
+
+    for job in all_jobs:
+        await dl_queue.put(job)
+
+    total_saved   = 0
+    total_dl_done = 0
+    saved_lock    = asyncio.Lock()
+    # Per-channel lock: tránh 2 DL worker tải cùng 1 channel NVR đồng thời
+    # khi download speeds khác nhau (cam nhanh xong trước, pick segment tiếp theo
+    # của cùng cam_id trước khi worker khác release channel đó)
+    _channel_locks: dict[int, asyncio.Lock] = {}
+
+    def _is_cancelled() -> bool:
+        ev = _cancel_events.get(task_name)
+        return ev is not None and ev.is_set()
+
+    # ── DL worker ──────────────────────────────────────────────────
+    async def _dl_worker(worker_id: int):
+        nonlocal total_dl_done
+        while True:
+            try:
+                cam_id, seg_start, seg_end, out = dl_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+            if _is_cancelled():
+                break
+
+            label = f"cam{cam_id} {seg_start:%H:%M}→{seg_end:%H:%M}"
+
+            # ── Cache hit: collect tất cả split parts đã có ────────
+            cached = _collect_split_parts(out)
+            if cached:
+                wlogger.debug(f"[DL-{worker_id}] {label} cached ({len(cached)} part(s))")
+                for part in cached:
+                    await detect_queue.put((cam_id, seg_start, seg_end, part))
+                continue
+
+            # ── Download với per-channel lock ─────────────────────
+            # Đảm bảo không có 2 worker tải cùng channel NVR đồng thời
+            if cam_id not in _channel_locks:
+                _channel_locks[cam_id] = asyncio.Lock()
+            async with _channel_locks[cam_id]:
+                wlogger.info(f"[DL-{worker_id}] Downloading {label}")
+                await playback.async_download_clip(
+                    cam_id, seg_start, seg_end, out,
+                    cancel_event=_cancel_events.get(task_name),
+                )
+
+            # ── Collect tất cả parts SDK tạo ra (base + _1, _2, ...) ──
+            # SDK tạo _1, _2, ... khi recording vượt NVR segment boundary
+            # hoặc giới hạn 1 GB — chỉ cần size > 1024 bytes là hợp lệ
+            all_parts   = _collect_split_parts(out)
+            valid_parts = [p for p in all_parts if p.stat().st_size > 1024]
+
+            if not valid_parts:
+                wlogger.error(f"[DL-{worker_id}] FAILED {label} — no valid parts found")
+                for p in all_parts:
+                    try: p.unlink(missing_ok=True)
+                    except: pass
+                continue
+
+            total_mb = sum(p.stat().st_size for p in valid_parts) // 1024 // 1024
+            wlogger.info(
+                f"[DL-{worker_id}] Done {label} "
+                f"({len(valid_parts)} part(s), {total_mb}MB total)"
+            )
+            async with saved_lock:
+                total_dl_done += 1
+
+            for part in valid_parts:
+                await detect_queue.put((cam_id, seg_start, seg_end, part))
+
+    # ── Detect workers ───────────────────────────────────────────────
+    executor = ThreadPoolExecutor(
+        max_workers=DETECT_WORKERS,
+        thread_name_prefix="bulk_detect",
+    )
+
+    async def _detect_worker(worker_id: int):
+        nonlocal total_saved
+
+        while True:
+            item = await detect_queue.get()
+            if item is None:
+                detect_queue.task_done()
+                break
+
+            cam_id, seg_start, seg_end, out = item
+
+            if _is_cancelled():
+                try: out.unlink(missing_ok=True)
+                except: pass
+                detect_queue.task_done()
+                continue
+
+            label = f"cam{cam_id} {seg_start:%H:%M}→{seg_end:%H:%M} [{out.name}]"
+            wlogger.info(f"[DETECT-{worker_id}] {label}")
+
+            loop = asyncio.get_event_loop()
+            try:
+                saved = await loop.run_in_executor(
+                    executor,
+                    lambda o=out, ci=cam_id, cs=seg_start, ce=seg_end: _detect_video(
+                        o, ci, cs, ce,
+                        cancel_event=_cancel_events.get(task_name),
+                    ),
+                )
+            except Exception as e:
+                wlogger.error(f"[DETECT-{worker_id}] {label} exception: {e}")
+                try: out.unlink(missing_ok=True)
+                except: pass
+                detect_queue.task_done()
+                continue
+
+            n = 0
+            for scan in (saved or []):
+                ok = await _post_scan(cam_id, scan)
+                if ok:
+                    n += 1
+
+            # Xóa file sau detect + post xong
+            try: out.unlink(missing_ok=True)
+            except: pass
+
+            async with saved_lock:
+                total_saved += n
+
+            wlogger.info(
+                f"[DETECT-{worker_id}] {label} → {n} QR(s) | total={total_saved}"
+            )
+            detect_queue.task_done()
+
+    # ── Chạy ────────────────────────────────────────────────────────
+    # [FIX #3] Chạy nvr_channels DL workers song song thay vì 1 worker
+    async def _dl_pool():
+        dl_workers = [_dl_worker(i) for i in range(nvr_channels)]
+        await asyncio.gather(*dl_workers)
+        # Gửi sentinel cho từng detect worker sau khi TẤT CẢ DL xong
+        for _ in range(DETECT_WORKERS):
+            await detect_queue.put(None)
+
+    detect_workers_tasks = [
+        asyncio.create_task(_detect_worker(i)) for i in range(DETECT_WORKERS)
+    ]
+    await asyncio.gather(
+        _dl_pool(),
+        *detect_workers_tasks,
+    )
+    executor.shutdown(wait=False)
+
+    _active_dirs.pop(task_name, None)
+
+    set_shift_finished(total_saved, job_id=job_id)
+    wlogger.info(f"[bulk] Hoàn tất | total_scans={total_saved} job_id={job_id}")
+    return total_saved
+
+
 async def scan_date(
     cam_ids:      list[int],
     target_date:  datetime,
@@ -404,6 +898,30 @@ async def run_shift(shift_name: str):
         end_hour    = shift.footage_end_hour,
         label       = shift.name,
         job_id      = job_id,   # ← BƯỚC 3
+    )
+
+async def run_daily_scan():
+    """Cron job chạy 1 lần/ngày — xử lý toàn bộ 60 cam, không chia ca."""
+    pool = db.get_pool()
+    rows = await pool.fetch("SELECT id FROM cameras WHERE status = 'active'")
+    cam_ids = [r["id"] for r in rows]
+
+    if not cam_ids:
+        wlogger.warning("[daily] Không có camera active — bỏ qua")
+        return
+
+    today = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    job_id = f"cron_daily_{datetime.now(TZ):%Y%m%d_%H%M}"
+    wlogger.info(f"[daily] {len(cam_ids)} cam | job_id={job_id}")
+
+    await scan_date_bulk(
+        cam_ids       = cam_ids,
+        target_date   = today,
+        start_hour    = 8,
+        end_hour      = 19,
+        job_id        = job_id,
+        nvr_channels  = NVR_CHANNELS,
+        segment_hours = SEGMENT_HOURS,
     )
 
 
@@ -558,7 +1076,17 @@ async def _run_scan_job(job: dict):
         sh, sm = map(int, job["start_time"].split(":"))
         eh, em = map(int, job["end_time"].split(":"))
         target = TZ.localize(datetime.strptime(job["date"], "%Y-%m-%d"))
-        await scan_date(
+        # await scan_date(
+        #     cam_ids      = job["cam_ids"],
+        #     target_date  = target,
+        #     start_hour   = sh,
+        #     end_hour     = eh,
+        #     start_minute = sm,
+        #     end_minute   = em,
+        #     label        = label,
+        #     job_id       = job_id,   # ← BƯỚC 3
+        # )
+        await scan_date_bulk(
             cam_ids      = job["cam_ids"],
             target_date  = target,
             start_hour   = sh,
@@ -566,7 +1094,7 @@ async def _run_scan_job(job: dict):
             start_minute = sm,
             end_minute   = em,
             label        = label,
-            job_id       = job_id,   # ← BƯỚC 3
+            job_id       = job_id,
         )
     except asyncio.CancelledError:
         wlogger.warning(f"[{label}] bị cancel — đang cleanup folder...")
@@ -664,19 +1192,14 @@ async def lifespan(app: FastAPI):
         logger.error(f"HikvisionPlayback init failed: {e} — worker sẽ không hoạt động")
 
     scheduler = AsyncIOScheduler(timezone=TZ)
-    for shift in SHIFTS:
-        scheduler.add_job(
-            run_shift,
-            trigger=CronTrigger(hour=shift.cron_hour, minute=shift.cron_minute, timezone=TZ),
-            args=[shift.name],
-            id=f"shift_{shift.name}",
-            misfire_grace_time=300,
-            replace_existing=True,
-        )
-        logger.info(
-            f"Scheduled shift [{shift.name}] "
-            f"{shift.cron_hour:02d}:{shift.cron_minute:02d} ICT"  # ← bỏ cam_ids, query lúc runtime
-        )
+    scheduler.add_job(
+        run_daily_scan,
+        CronTrigger(hour=20, minute=0, timezone=TZ),
+        id="daily_scan",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    logger.info("Scheduled daily scan at 20:00 ICT")
 
     scheduler.add_job(
         run_periodic_cleanup,
@@ -773,7 +1296,7 @@ async def serve_ui():
 # ── SSE: /worker/stream ──────────────────────────────────────────
 @app.get("/worker/stream")
 async def worker_stream(request: Request, secret: str = Query("")):
-    if secret != API_SECRET:
+    if secret not in (API_SECRET, VIEWER_SECRET):
         raise HTTPException(status_code=401, detail="Invalid secret")
 
     async def event_gen():
@@ -832,6 +1355,11 @@ class ScanTrigger(BaseModel):
     end_time:   str = "19:00"
 
 # ── Health ───────────────────────────────────────────────────────
+@app.get("/auth/role")
+async def get_role(key: str = Security(_api_key_header)):
+    """Trả về role của secret hiện tại để frontend phân quyền UI."""
+    return {"role": _resolve_role(key)}
+
 @app.get("/health")
 async def health(_=Depends(verify_secret)):
     redis_ok = False
@@ -856,7 +1384,7 @@ async def get_cameras(_=Depends(verify_secret)):
     return {"data": [c.__dict__ for c in cams]}
 
 @app.post("/cameras", status_code=201)
-async def create_camera(body: CameraCreate, _=Depends(verify_secret)):
+async def create_camera(body: CameraCreate, _=Depends(verify_admin)):
     if body.shift not in ("morning", "night"):
         raise HTTPException(400, "shift phải là 'morning' hoặc 'night'")
     cam_id = await db.insert_camera(body.name, body.shift, body.nvr_channel)
@@ -864,7 +1392,7 @@ async def create_camera(body: CameraCreate, _=Depends(verify_secret)):
     return {"id": cam_id, "msg": "Camera created"}
 
 @app.delete("/cameras/{cam_id}")
-async def remove_camera(cam_id: int, _=Depends(verify_secret)):
+async def remove_camera(cam_id: int, _=Depends(verify_admin)):
     ok = await db.delete_camera(cam_id)
     if not ok:
         raise HTTPException(404, f"Camera {cam_id} not found")
@@ -872,7 +1400,7 @@ async def remove_camera(cam_id: int, _=Depends(verify_secret)):
     return {"msg": f"Camera {cam_id} deactivated"}
 
 @app.post("/cameras/{cam_id}/restore")
-async def restore_camera(cam_id: int, _=Depends(verify_secret)):
+async def restore_camera(cam_id: int, _=Depends(verify_admin)):
     ok = await db.restore_camera(cam_id)
     if not ok:
         raise HTTPException(404, f"Camera {cam_id} không tìm thấy hoặc chưa bị xóa")
@@ -880,7 +1408,7 @@ async def restore_camera(cam_id: int, _=Depends(verify_secret)):
     return {"msg": f"Camera {cam_id} đã được khôi phục"}
 
 @app.put("/cameras/{cam_id}")
-async def update_camera(cam_id: int, body: CameraUpdate, _=Depends(verify_secret)):
+async def update_camera(cam_id: int, body: CameraUpdate, _=Depends(verify_admin)):
     if body.shift not in ("morning", "night"):
         raise HTTPException(400, "shift phải là morning hoặc night")
     pool = db.get_pool()
@@ -977,7 +1505,7 @@ async def worker_status(_=Depends(verify_secret)):
         return {"shift": None, "cameras": {}, "error": str(e)}
 
 @app.delete("/worker/jobs/done")
-async def clear_done_jobs(_=Depends(verify_secret)):
+async def clear_done_jobs(_=Depends(verify_admin)):
     """Xóa tất cả job done/error/cancelled khỏi worker_state.json."""
     from worker_scheduled.worker_state import clear_done_jobs as _clear
     removed = _clear()
@@ -985,7 +1513,7 @@ async def clear_done_jobs(_=Depends(verify_secret)):
 
 # ── Scan trigger ─────────────────────────────────────────────────
 @app.post("/scan/trigger", status_code=202)
-async def trigger_scan(body: ScanTrigger, _=Depends(verify_secret)):
+async def trigger_scan(body: ScanTrigger, _=Depends(verify_admin)):
     if _trigger_paused:
         raise HTTPException(503, "Trigger đang bị tạm dừng. Gọi POST /scan/resume trước.")
  
@@ -1057,9 +1585,12 @@ async def download_clip(scan_id: int, _=Depends(verify_secret)):
 
     path = FilePath(row["clip_file"])
 
-    # 3. File có tồn tại không?
+    # 3. File có tồn tại không? Nếu không → tự null DB để UI không hiện stale
     if not path.exists():
-        raise HTTPException(404, f"File không tồn tại trên disk: {path}")
+        await pool.execute(
+            "UPDATE qr_scans SET clip_file = NULL WHERE id = ", scan_id
+        )
+        raise HTTPException(404, "Clip đã bị xóa khỏi server (đã cập nhật trạng thái).")
 
     # 4. Serve
     return FileResponse(
@@ -1070,21 +1601,21 @@ async def download_clip(scan_id: int, _=Depends(verify_secret)):
     )
 
 @app.post("/scan/pause")
-async def pause_trigger(_=Depends(verify_secret)):
+async def pause_trigger(_=Depends(verify_admin)):
     global _trigger_paused
     _trigger_paused = True
     logger.warning(f"Trigger PAUSED | active_tasks={len(_active_tasks)}")
     return {"msg": "Trigger đã tạm dừng", "active_tasks": len(_active_tasks)}
 
 @app.post("/scan/resume")
-async def resume_trigger(_=Depends(verify_secret)):
+async def resume_trigger(_=Depends(verify_admin)):
     global _trigger_paused
     _trigger_paused = False
     logger.info("Trigger RESUMED")
     return {"msg": "Trigger đã tiếp tục"}
 
 @app.post("/scan/cancel")
-async def cancel_active_tasks(_=Depends(verify_secret)):
+async def cancel_active_tasks(_=Depends(verify_admin)):
     count = len(_active_tasks)
     for t in list(_active_tasks):
         # Set event trước
@@ -1118,7 +1649,7 @@ async def list_scan_tasks(_=Depends(verify_secret)):
  
  
 @app.post("/scan/cancel/{task_name}")
-async def cancel_one_task(task_name: str, _=Depends(verify_secret)):
+async def cancel_one_task(task_name: str, _=Depends(verify_admin)):
     target = next((t for t in list(_active_tasks) if t.get_name() == task_name), None)
     if target is None:
         raise HTTPException(404, f"Task '{task_name}' không tồn tại hoặc đã kết thúc")
@@ -1141,7 +1672,7 @@ async def cancel_one_task(task_name: str, _=Depends(verify_secret)):
 
 
 @app.post("/jobs/cleanup")
-async def manual_cleanup(_=Depends(verify_secret)):
+async def manual_cleanup(_=Depends(verify_admin)):
     """
     Xóa thủ công folder ngày rỗng và clip on-demand cũ.
     An toàn: không đụng đến folder đang được task active sử dụng.
@@ -1160,7 +1691,7 @@ async def manual_cleanup(_=Depends(verify_secret)):
 # ── DEBUG──────────────────────────────────────────────────
 
 @app.post("/debug/clip-cleanup")
-async def debug_clip_cleanup(_=Depends(verify_secret)):
+async def debug_clip_cleanup(_=Depends(verify_admin)):
     n_clips = await asyncio.to_thread(_cleanup_stale_clips, 24)
     n_size  = await asyncio.to_thread(_cleanup_clips_by_size)
     return {
