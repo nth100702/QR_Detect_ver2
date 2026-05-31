@@ -48,7 +48,7 @@ from worker_scheduled.config import (
 from worker_scheduled.downloader import download_cam_chunks, chunk_ranges
 from worker_scheduled.detector import process_video
 from worker_scheduled.worker_state import (
-    set_shift_started, set_shift_finished,
+    set_shift_started, set_shift_finished, update_job_counters,
     set_cam_downloading, set_cam_chunk_progress,
     set_cam_detecting, set_cam_done, set_cam_error,
 )
@@ -659,7 +659,7 @@ async def scan_date_bulk(
         f"[bulk] {len(cam_ids)} cam → {total_jobs} segment jobs | "
         f"nvr_channels={nvr_channels} detect_workers={DETECT_WORKERS} job_id={job_id}"
     )
-    set_shift_started(f"bulk {target_date:%Y-%m-%d}", target_date.strftime("%Y-%m-%d"), cam_ids, job_id=job_id)
+    set_shift_started(f"bulk {target_date:%Y-%m-%d}", target_date.strftime("%Y-%m-%d"), cam_ids, job_id=job_id, segments_total=total_jobs)
 
     # ── Queues ──────────────────────────────────────────────────────
     dl_queue:     asyncio.Queue = asyncio.Queue()
@@ -706,6 +706,7 @@ async def scan_date_bulk(
             # Đảm bảo không có 2 worker tải cùng channel NVR đồng thời
             if cam_id not in _channel_locks:
                 _channel_locks[cam_id] = asyncio.Lock()
+            await update_job_counters(job_id, dl_delta=+1)
             async with _channel_locks[cam_id]:
                 wlogger.info(f"[DL-{worker_id}] Downloading {label}")
                 await playback.async_download_clip(
@@ -714,18 +715,18 @@ async def scan_date_bulk(
                 )
 
             # ── Collect tất cả parts SDK tạo ra (base + _1, _2, ...) ──
-            # SDK tạo _1, _2, ... khi recording vượt NVR segment boundary
-            # hoặc giới hạn 1 GB — chỉ cần size > 1024 bytes là hợp lệ
             all_parts   = _collect_split_parts(out)
             valid_parts = [p for p in all_parts if p.stat().st_size > 1024]
 
             if not valid_parts:
+                await update_job_counters(job_id, dl_delta=-1)
                 wlogger.error(f"[DL-{worker_id}] FAILED {label} — no valid parts found")
                 for p in all_parts:
                     try: p.unlink(missing_ok=True)
                     except: pass
                 continue
 
+            await update_job_counters(job_id, dl_delta=-1, dl_done_delta=+1)
             total_mb = sum(p.stat().st_size for p in valid_parts) // 1024 // 1024
             wlogger.info(
                 f"[DL-{worker_id}] Done {label} "
@@ -763,6 +764,7 @@ async def scan_date_bulk(
             label = f"cam{cam_id} {seg_start:%H:%M}→{seg_end:%H:%M} [{out.name}]"
             wlogger.info(f"[DETECT-{worker_id}] {label}")
 
+            await update_job_counters(job_id, detect_delta=+1)
             loop = asyncio.get_event_loop()
             try:
                 saved = await loop.run_in_executor(
@@ -773,12 +775,14 @@ async def scan_date_bulk(
                     ),
                 )
             except Exception as e:
+                await update_job_counters(job_id, detect_delta=-1)
                 wlogger.error(f"[DETECT-{worker_id}] {label} exception: {e}")
                 try: out.unlink(missing_ok=True)
                 except: pass
                 detect_queue.task_done()
                 continue
 
+            await update_job_counters(job_id, detect_delta=-1, detect_done_delta=+1)
             n = 0
             for scan in (saved or []):
                 ok = await _post_scan(cam_id, scan)

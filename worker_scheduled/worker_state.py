@@ -75,10 +75,11 @@ async def _update_cam(cam_id: int, updates: dict, job_id: str = ""):
 # ── Public API ────────────────────────────────────────────────────
 
 def set_shift_started(
-    shift_name:  str,
-    target_date: str,
-    cam_ids:     list[int],
-    job_id:      str = "",
+    shift_name:     str,
+    target_date:    str,
+    cam_ids:        list[int],
+    job_id:         str = "",
+    segments_total: int = 0,
 ):
     """
     Khởi tạo 1 job mới trong state.
@@ -86,30 +87,46 @@ def set_shift_started(
     """
     data = _read()
     data["jobs"][job_id] = {
-        "job_id":      job_id,
-        "source":      "cron" if job_id.startswith("cron_") else "manual",
-        "label":       shift_name,
-        "target_date": target_date,
-        "cam_ids":     cam_ids,
-        "status":      "running",
-        "started_at":  _now(),
-        "finished_at": None,
-        "total_scans": 0,
-        "cameras": {
-            str(cam_id): {
-                "cam_id":        cam_id,
-                "status":        "waiting",
-                "chunks_total":  0,
-                "chunks_done":   0,
-                "scans_found":   0,
-                "current_chunk": None,
-                "updated_at":    _now(),
-            }
-            for cam_id in cam_ids
-        },
+        "job_id":         job_id,
+        "source":         "cron" if job_id.startswith("cron_") else "manual",
+        "label":          shift_name,
+        "target_date":    target_date,
+        "cam_ids":        cam_ids,
+        "status":         "running",
+        "started_at":     _now(),
+        "finished_at":    None,
+        "total_scans":    0,
+        "segments_total": segments_total,
+        "dl_active":      0,
+        "dl_done":        0,
+        "detect_active":  0,
+        "detect_done":    0,
     }
     _cleanup_old_jobs(data)
     _write(data)
+
+
+async def update_job_counters(
+    job_id:           str,
+    dl_delta:         int = 0,
+    detect_delta:     int = 0,
+    dl_done_delta:    int = 0,
+    detect_done_delta: int = 0,
+):
+    """Atomic increment/decrement worker counters cho scan_date_bulk."""
+    async with _state_lock:
+        data = _read()
+        job  = data["jobs"].get(job_id, {})
+        if dl_delta:
+            job["dl_active"]     = max(0, job.get("dl_active", 0) + dl_delta)
+        if detect_delta:
+            job["detect_active"] = max(0, job.get("detect_active", 0) + detect_delta)
+        if dl_done_delta:
+            job["dl_done"]       = job.get("dl_done", 0) + dl_done_delta
+        if detect_done_delta:
+            job["detect_done"]   = job.get("detect_done", 0) + detect_done_delta
+        data["jobs"][job_id] = job
+        _write(data)
 
 
 def set_cam_downloading(cam_id: int, chunks_total: int, job_id: str = ""):

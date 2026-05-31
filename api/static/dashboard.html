@@ -978,49 +978,26 @@ tailwind.config = {
                 <span x-show="job.status==='done'||job.total_scans>0" class="text-green-400 font-semibold"
                       x-text="(job.total_scans||0) + ' QR'"></span>
               </div>
-              <!-- Tiến độ cam tổng -->
-              <template x-if="job.cameras && Object.keys(job.cameras).length > 0">
-                <div x-data="{
-                  get camDone() { return Object.values(job.cameras).filter(c=>c.status==='done'||c.status==='error').length },
-                  get camTotal() { return Object.keys(job.cameras).length }
-                }">
-                  <div class="flex items-center justify-between text-xs dark:text-gray-400 text-gray-500 mb-1">
-                    <span x-text="'Cam ' + camDone + '/' + camTotal + ' hoàn tất'"></span>
-                    <span x-text="Math.round(camDone/camTotal*100) + '%'"></span>
+              <!-- Worker progress -->
+              <template x-if="job.segments_total > 0">
+                <div class="space-y-2">
+                  <!-- Download row -->
+                  <div class="flex items-center gap-2 text-xs">
+                    <span class="w-16 shrink-0 text-blue-400 font-medium">Download</span>
+                    <div class="prog-track flex-1">
+                      <div class="prog-fill" :style="'width:' + Math.round((job.dl_done||0)/job.segments_total*100) + '%'"></div>
+                    </div>
+                    <span class="font-mono dark:text-gray-400 text-gray-500 shrink-0 w-28 text-right"
+                          x-text="(job.dl_active||0) + ' active · ' + (job.dl_done||0) + '/' + job.segments_total"></span>
                   </div>
-                  <div class="prog-track mb-3">
-                    <div class="prog-fill" :style="'width:' + Math.round(camDone/camTotal*100) + '%'"></div>
-                  </div>
-                  <!-- Per-cam rows -->
-                  <div class="space-y-1.5">
-                    <template x-for="[camId, cam] in Object.entries(job.cameras)" :key="camId">
-                      <div class="flex items-center gap-2 text-xs">
-                        <span class="font-mono dark:text-gray-500 text-gray-400 w-14 shrink-0" x-text="'CAM ' + camId"></span>
-                        <span class="badge shrink-0" :class="'badge-'+(cam.status||'waiting')" x-text="(cam.status||'waiting').toUpperCase()"></span>
-                        <template x-if="cam.status==='downloading' && cam.chunks_total>0">
-                          <div class="flex-1 flex items-center gap-2">
-                            <div class="prog-track flex-1"><div class="prog-fill" :style="'width:'+Math.round(cam.chunks_done/cam.chunks_total*100)+'%'"></div></div>
-                            <span class="font-mono dark:text-gray-500 text-gray-400 shrink-0"
-                                  x-text="cam.chunks_done+'/'+cam.chunks_total+(cam.current_chunk?' · '+cam.current_chunk:'')"></span>
-                          </div>
-                        </template>
-                        <template x-if="cam.status==='detecting'">
-                          <div class="flex-1 flex items-center gap-2">
-                            <div class="prog-track flex-1"><div class="prog-fill" style="width:100%"></div></div>
-                            <span class="dark:text-gray-500 text-gray-400 shrink-0">Scan QR…</span>
-                          </div>
-                        </template>
-                        <span x-show="cam.status==='done'" class="text-green-400 flex-1 flex items-center gap-1">
-                          <svg class="icon-xs"><use href="#icon-check-circle"/></svg>
-                          <span x-text="(cam.scans_found||0)+' QR'"></span>
-                        </span>
-                        <span x-show="cam.status==='error'" class="text-red-400 flex-1 flex items-center gap-1">
-                          <svg class="icon-xs shrink-0"><use href="#icon-x-circle"/></svg>
-                          <span x-text="cam.current_chunk||'lỗi'" class="truncate"></span>
-                        </span>
-                        <span x-show="!cam.status||cam.status==='waiting'" class="dark:text-gray-500 text-gray-400 flex-1">Chờ…</span>
-                      </div>
-                    </template>
+                  <!-- Detect row -->
+                  <div class="flex items-center gap-2 text-xs">
+                    <span class="w-16 shrink-0 text-orange-400 font-medium">Detect</span>
+                    <div class="prog-track flex-1">
+                      <div class="prog-fill" :style="'width:' + Math.round((job.detect_done||0)/job.segments_total*100) + '%'"></div>
+                    </div>
+                    <span class="font-mono dark:text-gray-400 text-gray-500 shrink-0 w-28 text-right"
+                          x-text="(job.detect_active||0) + ' active · ' + (job.detect_done||0) + '/' + job.segments_total"></span>
                   </div>
                 </div>
               </template>
@@ -1086,49 +1063,26 @@ tailwind.config = {
                 <span x-show="job.status==='done'||job.total_scans>0" class="text-green-400 font-semibold"
                       x-text="(job.total_scans||0) + ' QR'"></span>
               </div>
-              <!-- Tiến độ cam tổng -->
-              <template x-if="job.cameras && Object.keys(job.cameras).length > 0">
-                <div x-data="{
-                  get camDone() { return Object.values(job.cameras).filter(c=>c.status==='done'||c.status==='error').length },
-                  get camTotal() { return Object.keys(job.cameras).length }
-                }">
-                  <div class="flex items-center justify-between text-xs dark:text-gray-400 text-gray-500 mb-1">
-                    <span x-text="'Cam ' + camDone + '/' + camTotal + ' hoàn tất'"></span>
-                    <span x-text="Math.round(camDone/camTotal*100) + '%'"></span>
+              <!-- Worker progress -->
+              <template x-if="job.segments_total > 0">
+                <div class="space-y-2">
+                  <!-- Download row -->
+                  <div class="flex items-center gap-2 text-xs">
+                    <span class="w-16 shrink-0 text-blue-400 font-medium">Download</span>
+                    <div class="prog-track flex-1">
+                      <div class="prog-fill" :style="'width:' + Math.round((job.dl_done||0)/job.segments_total*100) + '%'"></div>
+                    </div>
+                    <span class="font-mono dark:text-gray-400 text-gray-500 shrink-0 w-28 text-right"
+                          x-text="(job.dl_active||0) + ' active · ' + (job.dl_done||0) + '/' + job.segments_total"></span>
                   </div>
-                  <div class="prog-track mb-3">
-                    <div class="prog-fill" :style="'width:' + Math.round(camDone/camTotal*100) + '%'"></div>
-                  </div>
-                  <!-- Per-cam rows -->
-                  <div class="space-y-1.5">
-                    <template x-for="[camId, cam] in Object.entries(job.cameras)" :key="camId">
-                      <div class="flex items-center gap-2 text-xs">
-                        <span class="font-mono dark:text-gray-500 text-gray-400 w-14 shrink-0" x-text="'CAM ' + camId"></span>
-                        <span class="badge shrink-0" :class="'badge-'+(cam.status||'waiting')" x-text="(cam.status||'waiting').toUpperCase()"></span>
-                        <template x-if="cam.status==='downloading' && cam.chunks_total>0">
-                          <div class="flex-1 flex items-center gap-2">
-                            <div class="prog-track flex-1"><div class="prog-fill" :style="'width:'+Math.round(cam.chunks_done/cam.chunks_total*100)+'%'"></div></div>
-                            <span class="font-mono dark:text-gray-500 text-gray-400 shrink-0"
-                                  x-text="cam.chunks_done+'/'+cam.chunks_total+(cam.current_chunk?' · '+cam.current_chunk:'')"></span>
-                          </div>
-                        </template>
-                        <template x-if="cam.status==='detecting'">
-                          <div class="flex-1 flex items-center gap-2">
-                            <div class="prog-track flex-1"><div class="prog-fill" style="width:100%"></div></div>
-                            <span class="dark:text-gray-500 text-gray-400 shrink-0">Scan QR…</span>
-                          </div>
-                        </template>
-                        <span x-show="cam.status==='done'" class="text-green-400 flex-1 flex items-center gap-1">
-                          <svg class="icon-xs"><use href="#icon-check-circle"/></svg>
-                          <span x-text="(cam.scans_found||0)+' QR'"></span>
-                        </span>
-                        <span x-show="cam.status==='error'" class="text-red-400 flex-1 flex items-center gap-1">
-                          <svg class="icon-xs shrink-0"><use href="#icon-x-circle"/></svg>
-                          <span x-text="cam.current_chunk||'lỗi'" class="truncate"></span>
-                        </span>
-                        <span x-show="!cam.status||cam.status==='waiting'" class="dark:text-gray-500 text-gray-400 flex-1">Chờ…</span>
-                      </div>
-                    </template>
+                  <!-- Detect row -->
+                  <div class="flex items-center gap-2 text-xs">
+                    <span class="w-16 shrink-0 text-orange-400 font-medium">Detect</span>
+                    <div class="prog-track flex-1">
+                      <div class="prog-fill" :style="'width:' + Math.round((job.detect_done||0)/job.segments_total*100) + '%'"></div>
+                    </div>
+                    <span class="font-mono dark:text-gray-400 text-gray-500 shrink-0 w-28 text-right"
+                          x-text="(job.detect_active||0) + ' active · ' + (job.detect_done||0) + '/' + job.segments_total"></span>
                   </div>
                 </div>
               </template>
