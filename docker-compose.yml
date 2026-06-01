@@ -46,35 +46,19 @@ services:
       retries: 5
 
   api:
-    image: nth100702/qr-api:v1
+    image: nth100702/qr-api:v2
     container_name: qr_api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     env_file: .env
     ports:
       - "0.0.0.0:8000:8000"
     volumes:
-      - ./data:/app/data                      # temp_videos, temp_clips, logs
-      - ./sdk/lib:/app/sdk/lib:ro             # libhcnetsdk.so
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-          cpus: '1.0'
-    environment:
-      - LD_LIBRARY_PATH=/app/sdk/lib          # Linux SDK loader
-
-  worker_ondemand:
-    image: nth100702/worker_ondemand:v1
-    container_name: qr_worker_ondemand
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - ./data:/app/data
+      - ./data/temp_videos:/app/temp_videos
+      - ./data/temp_clips:/app/temp_clips
+      - ./data/logs:/app/logs
       - ./sdk/lib:/app/sdk/lib:ro
     depends_on:
       postgres:
@@ -84,8 +68,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384m
-          cpus: '0.8'
+          memory: 1500m   # scan workers (3×detect) + ondemand + API
+          cpus: '3.5'
     environment:
       - LD_LIBRARY_PATH=/app/sdk/lib
 
