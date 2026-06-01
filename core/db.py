@@ -1,9 +1,3 @@
-"""
-shared/db.py
-asyncpg connection pool + helper functions.
-Tất cả worker và api đều import từ đây.
-"""
-
 import asyncpg
 import os
 import logging
@@ -18,7 +12,6 @@ _pool: asyncpg.Pool | None = None
 
 
 def _parse_date(date: str | date_type | None) -> date_type | None:
-    """Convert string 'YYYY-MM-DD' → datetime.date. Bỏ qua nếu None hoặc đã là date."""
     if date is None:
         return None
     if isinstance(date, date_type):
@@ -31,13 +24,12 @@ def _parse_date(date: str | date_type | None) -> date_type | None:
 
 
 async def init_pool(dsn: str | None = None, min_size: int = 2, max_size: int = 10):
-    """
-    Khởi tạo connection pool.
-    Gọi 1 lần khi startup (lifespan FastAPI hoặc worker main).
-    """
     global _pool
     dsn = dsn or os.environ["DATABASE_URL"]
-    _pool = await asyncpg.create_pool(dsn, min_size=min_size, max_size=max_size,server_settings={"TimeZone": "Asia/Ho_Chi_Minh"},)
+    _pool = await asyncpg.create_pool(
+        dsn, min_size=min_size, max_size=max_size,
+        server_settings={"TimeZone": "Asia/Ho_Chi_Minh"},
+    )
     logger.info(f"asyncpg pool ready (min={min_size} max={max_size})")
 
 
@@ -55,8 +47,6 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
-# ─── Cameras ─────────────────────────────────────────────────────
-
 async def list_cameras(status: str | None = "active") -> list[Camera]:
     q = "SELECT id, name, shift, nvr_channel, status FROM cameras"
     params = []
@@ -70,8 +60,7 @@ async def list_cameras(status: str | None = "active") -> list[Camera]:
 
 async def get_camera(cam_id: int) -> Camera | None:
     row = await get_pool().fetchrow(
-        "SELECT id, name, shift, nvr_channel, status FROM cameras WHERE id = $1",
-        cam_id,
+        "SELECT id, name, shift, nvr_channel, status FROM cameras WHERE id = $1", cam_id
     )
     return Camera(**dict(row)) if row else None
 
@@ -82,47 +71,37 @@ async def insert_camera(name: str, shift: str, nvr_channel: int) -> int:
         name, shift, nvr_channel,
     )
 
+
 async def restore_camera(cam_id: int) -> bool:
     result = await get_pool().execute(
-        "UPDATE cameras SET status='active' WHERE id=$1 AND status='deleted'",
-        cam_id
+        "UPDATE cameras SET status='active' WHERE id=$1 AND status='deleted'", cam_id
     )
     return result == "UPDATE 1"
 
+
 async def delete_camera(cam_id: int) -> bool:
     pool = get_pool()
-    
     has_scans = await pool.fetchval(
         "SELECT EXISTS(SELECT 1 FROM qr_scans WHERE cam_id=$1)", cam_id
     )
-    
     if has_scans:
         result = await pool.execute(
             "UPDATE cameras SET status='deleted' WHERE id=$1", cam_id
         )
         return result == "UPDATE 1"
     else:
-        result = await pool.execute(
-            "DELETE FROM cameras WHERE id=$1", cam_id
-        )
+        result = await pool.execute("DELETE FROM cameras WHERE id=$1", cam_id)
         return result == "DELETE 1"
 
 
 async def get_channel_map() -> dict[int, int]:
-    """Trả về {cam_id: nvr_channel} cho tất cả camera active."""
     rows = await get_pool().fetch(
         "SELECT id, nvr_channel FROM cameras WHERE status = 'active'"
     )
     return {r["id"]: r["nvr_channel"] for r in rows}
 
 
-# ─── QR Scans ────────────────────────────────────────────────────
-
 async def insert_qr(scan: QrScan) -> int | None:
-    """
-    Insert QR scan. Bỏ qua nếu trùng (cam_id, qr_value, chunk_start).
-    Trả về id mới hoặc None nếu duplicate.
-    """
     try:
         return await get_pool().fetchval(
             """
@@ -164,8 +143,7 @@ async def get_scans(
     limit:    int = 50,
     offset:   int = 0,
 ) -> tuple[int, list[dict]]:
-    parsed_date = _parse_date(date)  # FIX: string → date_type
-
+    parsed_date = _parse_date(date)
     conditions, params = [], []
     idx = 1
 
@@ -202,20 +180,16 @@ async def update_clip_path(scan_id: int, clip_file: str):
 async def get_stats_today() -> dict:
     row = await get_pool().fetchrow(
         """
-        SELECT
-            COUNT(*)                 AS total_scans,
-            COUNT(DISTINCT cam_id)   AS active_cams,
-            COUNT(DISTINCT qr_value) AS unique_qrs,
-            MAX(detected_at)         AS last_scan
-        FROM qr_scans
-        WHERE DATE(detected_at) = CURRENT_DATE
+        SELECT COUNT(*) AS total_scans, COUNT(DISTINCT cam_id) AS active_cams,
+               COUNT(DISTINCT qr_value) AS unique_qrs, MAX(detected_at) AS last_scan
+        FROM qr_scans WHERE DATE(detected_at) = CURRENT_DATE
         """
     )
     return dict(row) if row else {}
 
 
 async def get_stats_by_cam(date: str | date_type | None = None) -> list[dict]:
-    parsed = _parse_date(date)  # FIX: string → date_type
+    parsed = _parse_date(date)
     cond   = "WHERE DATE(s.detected_at) = $1" if parsed else ""
     params = [parsed] if parsed else []
     rows   = await get_pool().fetch(

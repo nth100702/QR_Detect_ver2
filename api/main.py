@@ -13,11 +13,9 @@ Redis là OPTIONAL:
 """
 
 import asyncio
-from asyncio import subprocess
 import json
 import logging
 import logging.handlers
-import re
 import shutil
 import uuid
 import threading
@@ -38,16 +36,16 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path as FilePath
 from pydantic import BaseModel
 
-from shared import db
-from shared.hikvision_playback import init_playback, get_playback
-from shared.models import QrScan
-from worker_scheduled.config import (
+from core import db
+from core.nvr import init_playback, get_playback, refresh_channel_map
+from core.models import QrScan
+from core.config import (
     API_SECRET, VIEWER_SECRET, REDIS_URL, API_HOST, API_PORT, LOG_DIR,
     SHIFTS, CHUNK_MINUTES, TEMP_VIDEO_DIR, TEMP_CLIP_DIR, NVR_CHANNELS, SEGMENT_HOURS
 )
-from worker_scheduled.downloader import download_cam_chunks, chunk_ranges
-from worker_scheduled.detector import process_video
-from worker_scheduled.worker_state import (
+from scanner.downloader import download_cam_chunks, chunk_ranges
+from scanner.detect import process_video
+from scanner.state import (
     set_shift_started, set_shift_finished, update_job_counters,
     set_cam_downloading, set_cam_chunk_progress,
     set_cam_detecting, set_cam_done, set_cam_error,
@@ -131,8 +129,8 @@ def get_scan_trigger_queue() -> asyncio.Queue:
 #     start_minute: int = 0,
 #     end_minute:   int = 0,
 # ):
-#     from worker_scheduled.downloader import _semaphore
-#     from shared.hikvision_playback import get_playback
+#     from scanner.downloader import _semaphore
+#     from core.nvr import get_playback
 
 #     footage_start = TZ.normalize(date.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0))
 #     footage_end   = TZ.normalize(date.replace(hour=end_hour,   minute=end_minute,   second=0, microsecond=0))
@@ -198,7 +196,7 @@ def get_scan_trigger_queue() -> asyncio.Queue:
 #     end_minute:   int = 0,
 #     label:        str = "",
 # ) -> int:
-#     from shared.db import get_channel_map
+#     from core.db import get_channel_map
 #     get_playback().cfg.channel_map = await get_channel_map()
 #     wlogger.info(f"Channel map: {get_playback().cfg.channel_map}")
 #     date_str = target_date.strftime("%Y-%m-%d")
@@ -249,8 +247,8 @@ async def download_full_clip(
     start_hour: int,
     end_hour: int,
 ):
-    from shared.hikvision_playback import get_playback
-    from worker_scheduled.config import SEMAPHORE_COUNT
+    from core.nvr import get_playback
+    from core.config import SEMAPHORE_COUNT
     footage_start = date.replace(
         hour=start_hour,
         minute=0,
@@ -316,9 +314,9 @@ async def download_full_clip(
 #     - Consumer pool: DETECT_WORKERS coroutine chạy detect song song qua ThreadPoolExecutor
 #     - Lock per (cam_id, date): tránh conflict khi cron và manual trigger trùng cam+ngày
 #     """
-#     from worker_scheduled.downloader import _semaphore, chunk_ranges
-#     from worker_scheduled.config import DETECT_WORKERS
-#     from shared.hikvision_playback import get_playback
+#     from scanner.downloader import _semaphore, chunk_ranges
+#     from core.config import DETECT_WORKERS
+#     from core.nvr import get_playback
 #     from concurrent.futures import ThreadPoolExecutor
 
 #     lock_key = f"{cam_id}_{date.strftime('%Y%m%d')}"
@@ -433,7 +431,7 @@ async def download_full_clip(
 #                 )
 
 #                 # POST kết quả
-#                 from worker_scheduled.detector import _post_scan
+#                 from scanner.detect import _post_scan
 #                 n = 0
 #                 for scan in saved:
 #                     ok = await _post_scan(cam_id, scan)
@@ -473,8 +471,8 @@ async def _download_detect_pipeline(
     BƯỚC 2: Lock per (cam_id, date) — nếu cron đang chạy cam này cùng ngày,
     manual trigger sẽ chờ cron xong rồi mới chạy (không conflict file).
     """
-    from worker_scheduled.downloader import _semaphore, chunk_ranges
-    from shared.hikvision_playback import get_playback
+    from scanner.downloader import _semaphore, chunk_ranges
+    from core.nvr import get_playback
  
     # ── BƯỚC 2: Acquire lock per (cam_id, date) ──────────────────
     lock_key = f"{cam_id}_{date.strftime('%Y%m%d')}"
@@ -607,9 +605,9 @@ async def scan_date_bulk(
     nvr_channels:  int = NVR_CHANNELS,
     segment_hours: int = SEGMENT_HOURS,
 ) -> int:
-    from shared.hikvision_playback import get_playback
-    from worker_scheduled.detector import _detect_video, _post_scan
-    from worker_scheduled.config import DETECT_WORKERS
+    from core.nvr import get_playback
+    from scanner.detect import _detect_video, _post_scan
+    from core.config import DETECT_WORKERS
     from concurrent.futures import ThreadPoolExecutor
 
     playback  = get_playback()
@@ -836,7 +834,7 @@ async def scan_date(
     label:        str = "",
     job_id:       str = "",   # ← BƯỚC 3: nhận job_id từ run_shift / _run_scan_job
 ) -> int:
-    from shared.db import get_channel_map
+    from core.db import get_channel_map
     get_playback().cfg.channel_map = await get_channel_map()
     wlogger.info(f"Channel map: {get_playback().cfg.channel_map}")
  
@@ -1168,6 +1166,79 @@ async def listen_scan_triggers(queue: asyncio.Queue):
         except Exception as e:
             wlogger.exception(f"Trigger listener error: {e}")
 
+async def _run_ondemand_worker(redis: aioredis.Redis):
+    """Background loop: lắng nghe Redis queue, xử lý on-demand clip jobs."""
+    from ondemand.clipper import fetch_clip
+    import httpx
+
+    async def _set_status(job_id: str, payload: dict):
+        await redis.setex(f"job:status:{job_id}", STATUS_TTL, json.dumps(payload))
+
+    while True:
+        try:
+            result = await redis.brpop(QUEUE_KEY, timeout=5)
+            if result is None:
+                continue
+            _, raw = result
+            try:
+                job = json.loads(raw)
+            except json.JSONDecodeError as e:
+                logger.error(f"[ondemand] Invalid job JSON: {e}")
+                continue
+
+            job_id   = job.get("job_id", "unknown")
+            qr_value = job.get("qr_value", "")
+            records  = job.get("records", [])
+
+            logger.info(f"[ondemand] JOB {job_id} | qr={qr_value} | {len(records)} scan(s)")
+            await _set_status(job_id, {
+                "job_id": job_id, "status": "running",
+                "qr_value": qr_value, "total": len(records), "done": 0,
+            })
+
+            clip_files = []
+            for idx, rec in enumerate(records):
+                from datetime import timezone, timedelta as _td
+                ICT = timezone(_td(hours=7))
+                detected_at = datetime.fromisoformat(rec["detected_at"])
+                if detected_at.tzinfo is not None:
+                    detected_at = detected_at.astimezone(ICT).replace(tzinfo=None)
+
+                clip_path = await fetch_clip(job_id, rec["scan_id"], rec["cam_id"], detected_at)
+                if clip_path:
+                    clip_files.append(str(clip_path))
+                    async with httpx.AsyncClient(base_url=f"http://localhost:{API_PORT}", timeout=10) as client:
+                        try:
+                            await client.patch(
+                                f"/scans/{rec['scan_id']}/clip",
+                                json={"clip_file": str(clip_path)},
+                                headers={"X-Secret": API_SECRET},
+                            )
+                        except Exception as e:
+                            logger.warning(f"[ondemand] PATCH clip failed: {e}")
+
+                await _set_status(job_id, {
+                    "job_id": job_id, "status": "running",
+                    "qr_value": qr_value, "total": len(records), "done": idx + 1,
+                })
+
+            await _set_status(job_id, {
+                "job_id": job_id, "status": "done",
+                "qr_value": qr_value, "total": len(records),
+                "done": len(records), "clip_files": clip_files,
+            })
+            logger.info(f"[ondemand] JOB {job_id} done | {len(clip_files)}/{len(records)} clips")
+
+        except aioredis.RedisError as e:
+            logger.error(f"[ondemand] Redis error: {e}, retrying in 5s")
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.exception(f"[ondemand] Unexpected error: {e}")
+            await asyncio.sleep(1)
+
+
 # ── Lifespan ─────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1251,6 +1322,14 @@ async def lifespan(app: FastAPI):
     trigger_task.add_done_callback(_on_trigger_task_done)
     logger.info("Scan trigger listener started")
 
+    ondemand_task: asyncio.Task | None = None
+    if _redis:
+        ondemand_task = asyncio.create_task(
+            _run_ondemand_worker(_redis),
+            name="ondemand_worker",
+        )
+        logger.info("On-demand clip worker started")
+
     logger.info("API + Worker started")
     yield
 
@@ -1260,6 +1339,14 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     logger.info("Scan trigger listener stopped")
+
+    if ondemand_task:
+        ondemand_task.cancel()
+        try:
+            await ondemand_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("On-demand worker stopped")
 
     if _active_tasks:
         logger.info(f"Cancelling {len(_active_tasks)} active scan task(s)...")
@@ -1304,7 +1391,7 @@ async def worker_stream(request: Request, secret: str = Query("")):
         raise HTTPException(status_code=401, detail="Invalid secret")
 
     async def event_gen():
-        from worker_scheduled.worker_state import read_state
+        from scanner.state import read_state
         while True:
             if await request.is_disconnected():
                 break
@@ -1380,7 +1467,7 @@ async def health(_=Depends(verify_secret)):
         "time":         datetime.now().isoformat(),
     }
 
-from shared.hikvision_playback import refresh_channel_map
+from core.nvr import refresh_channel_map
 # ── Cameras ──────────────────────────────────────────────────────
 @app.get("/cameras")
 async def get_cameras(_=Depends(verify_secret)):
@@ -1503,7 +1590,7 @@ async def get_job(job_id: str, r=Depends(require_redis), _=Depends(verify_secret
 @app.get("/worker/status")
 async def worker_status(_=Depends(verify_secret)):
     try:
-        from worker_scheduled.worker_state import read_state
+        from scanner.state import read_state
         return read_state() or {"shift": None, "cameras": {}}
     except Exception as e:
         return {"shift": None, "cameras": {}, "error": str(e)}
@@ -1511,7 +1598,7 @@ async def worker_status(_=Depends(verify_secret)):
 @app.delete("/worker/jobs/done")
 async def clear_done_jobs(_=Depends(verify_admin)):
     """Xóa tất cả job done/error/cancelled khỏi worker_state.json."""
-    from worker_scheduled.worker_state import clear_done_jobs as _clear
+    from scanner.state import clear_done_jobs as _clear
     removed = _clear()
     return {"msg": f"Đã xóa {removed} job", "removed": removed}
 
@@ -1669,7 +1756,7 @@ async def cancel_one_task(task_name: str, _=Depends(verify_admin)):
     logger.warning(f"Per-task cancel: {task_name}")
 
     # Ghi state cancelled ngay — task_name == job_id
-    from worker_scheduled.worker_state import set_job_cancelled
+    from scanner.state import set_job_cancelled
     set_job_cancelled(task_name)
 
     return {"msg": f"Đã gửi cancel tới task '{task_name}'", "task_name": task_name}
