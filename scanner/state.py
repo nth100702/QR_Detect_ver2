@@ -156,6 +156,21 @@ def read_state() -> dict:
     return _read()
 
 
+def clear_stale_jobs():
+    """Khi startup: mark các job 'running' còn sót từ lần chạy trước thành 'error'."""
+    data = _read()
+    changed = False
+    for job in data.get("jobs", {}).values():
+        if job.get("status") == "running":
+            job["status"]      = "error"
+            job["finished_at"] = _now()
+            job["dl_active"]   = 0
+            job["detect_active"] = 0
+            changed = True
+    if changed:
+        _write(data)
+
+
 def clear_done_jobs() -> int:
     data      = _read()
     jobs      = data.get("jobs", {})

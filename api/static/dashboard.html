@@ -84,6 +84,7 @@ tailwind.config = {
   .dark .inp:focus { border-color: #f97316; }
   .inp:focus { border-color: #f97316; }
   .inp-error { border-color: #ef4444 !important; }
+  input[type="date"].inp { -webkit-appearance: none; appearance: none; }
 
   /* ── Buttons (PenguinUI-compatible) ── */
   .btn { border-radius: 8px; padding: 8px 16px; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: all 0.15s; font-family: 'Inter', sans-serif; display: inline-flex; align-items: center; gap: 6px; }
@@ -233,13 +234,13 @@ tailwind.config = {
   <symbol id="icon-plug" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
     <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/>
   </symbol>
-  <!-- sun -->
-  <symbol id="icon-sun" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-    <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z"/>
+  <!-- sun (solid) -->
+  <symbol id="icon-sun" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 2.25a.75.75 0 0 1 .75.75v2.25a.75.75 0 0 1-1.5 0V3a.75.75 0 0 1 .75-.75ZM7.5 12a4.5 4.5 0 1 1 9 0 4.5 4.5 0 0 1-9 0Zm11.394-5.834a.75.75 0 0 0-1.06-1.06l-1.591 1.59a.75.75 0 1 0 1.06 1.061l1.591-1.59ZM21.75 12a.75.75 0 0 1-.75.75h-2.25a.75.75 0 0 1 0-1.5H21a.75.75 0 0 1 .75.75Zm-3.916 6.894a.75.75 0 0 0 1.06-1.06l-1.59-1.591a.75.75 0 1 0-1.061 1.06l1.59 1.591ZM12 18a.75.75 0 0 1 .75.75V21a.75.75 0 0 1-1.5 0v-2.25A.75.75 0 0 1 12 18Zm-4.773-.834a.75.75 0 0 0-1.06 1.06l1.59 1.591a.75.75 0 1 0 1.061-1.06l-1.59-1.591ZM6 12a.75.75 0 0 1-.75.75H3a.75.75 0 0 1 0-1.5h2.25A.75.75 0 0 1 6 12Zm.834-4.773a.75.75 0 0 0 1.06 1.06l1.591-1.59a.75.75 0 1 0-1.06-1.061l-1.591 1.59Z"/>
   </symbol>
-  <!-- moon -->
-  <symbol id="icon-moon" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-    <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z"/>
+  <!-- moon (solid) -->
+  <symbol id="icon-moon" viewBox="0 0 24 24" fill="currentColor">
+    <path fill-rule="evenodd" d="M9.528 1.718a.75.75 0 0 1 .162.819A8.97 8.97 0 0 0 9 6a9 9 0 0 0 9 9 8.97 8.97 0 0 0 3.463-.69.75.75 0 0 1 .981.98 10.503 10.503 0 0 1-9.694 6.46c-5.799 0-10.5-4.701-10.5-10.5 0-4.368 2.667-8.112 6.46-9.694a.75.75 0 0 1 .818.162Z" clip-rule="evenodd"/>
   </symbol>
   <!-- arrow-right-on-rectangle (logout) -->
   <symbol id="icon-logout" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -378,7 +379,7 @@ tailwind.config = {
   </div>
 
   <!-- Nav items — PenguinUI vertical nav pattern -->
-  <nav class="flex-1 p-3 flex flex-col gap-0.5">
+  <nav class="flex-1 p-3 flex flex-col gap-0.5 overflow-y-auto">
     <!-- Search — tất cả đều thấy -->
     <button class="nav-item w-full text-left px-3 py-2.5 rounded-lg text-sm flex items-center gap-3"
             :class="{ 'active': page === 'search' }" @click="page = 'search'; sidebarOpen = false">
@@ -491,7 +492,7 @@ tailwind.config = {
           <input x-model="qr.query" @keydown.enter="qr.search()"
                  class="inp" placeholder="SPXVN... (để trống = tất cả QR trong ngày)" />
         </div>
-        <div class="min-w-0 sm:w-40">
+        <div class="w-full sm:w-40 min-w-0 overflow-hidden">
           <span class="label">Ngày</span>
           <input type="date" x-model="qr.date" class="inp w-full min-w-0 max-w-full" />
         </div>
@@ -1194,7 +1195,7 @@ tailwind.config = {
                   </select>
                 </div>
                 <div class="flex items-center">
-                  <input type="number" x-model.number="cam.editForm.nvr_channel" min="1" max="64"
+                  <input type="number" x-model.number="cam.editForm.nvr_channel" min="1" max="60"
                          class="inp text-xs" :class="cam.editError ? 'inp-error' : ''" />
                 </div>
                 <div></div>
@@ -1243,7 +1244,7 @@ tailwind.config = {
         </div>
         <div>
           <span class="label">NVR Channel *</span>
-          <input type="number" x-model.number="cam.newForm.nvr_channel" min="1" max="64"
+          <input type="number" x-model.number="cam.newForm.nvr_channel" min="1" max="60"
                  class="inp" :class="cam.addError ? 'inp-error' : ''"
                  @input="cam.addError = ''" />
         </div>
@@ -1800,6 +1801,7 @@ function app() {
       async save(id) {
         this.editError = '';
         if (!this.editForm.name.trim()) { this.editError = 'Tên camera không được để trống.'; return; }
+        if (this.editForm.nvr_channel < 1 || this.editForm.nvr_channel > 60) { this.editError = 'NVR Channel phải từ 1 đến 60.'; return; }
         const conflict = this._channelTaken(this.editForm.nvr_channel, id);
         if (conflict) { this.editError = `Channel ${this.editForm.nvr_channel} đã được dùng bởi "${conflict.name}".`; return; }
         try {
@@ -1827,6 +1829,7 @@ function app() {
       async add() {
         this.addError = '';
         if (!this.newForm.name.trim()) { this.addError = 'Tên camera không được để trống.'; return; }
+        if (this.newForm.nvr_channel < 1 || this.newForm.nvr_channel > 60) { this.addError = 'NVR Channel phải từ 1 đến 60.'; return; }
         const conflict = this._channelTaken(this.newForm.nvr_channel);
         if (conflict) { this.addError = `Channel ${this.newForm.nvr_channel} đã được dùng bởi "${conflict.name}".`; return; }
         this.adding = true;

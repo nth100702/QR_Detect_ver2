@@ -58,7 +58,7 @@ STREAM_ID_LEN = 32
 class NET_DVR_STREAM_INFO(Structure):
     _fields_ = [
         ("dwSize", c_uint), ("byID", c_byte * STREAM_ID_LEN),
-        ("dwChannel", c_uint), ("byRes", c_byte * 32),
+        ("dwChannel", c_uint), ("byStreamType", c_byte), ("byRes", c_byte * 31),
     ]
 
 
@@ -99,7 +99,7 @@ class HikvisionPlayback:
     POLL_INTERVAL_SEC   = 2
     DEFAULT_TIMEOUT_SEC = 600
     STALL_THRESHOLD_PCT = 1
-    STALL_WINDOW_SEC    = 120
+    STALL_WINDOW_SEC    = 300
 
     def __init__(self, cfg: NVRConfig):
         if sdk is None:
@@ -169,12 +169,14 @@ class HikvisionPlayback:
         if channel is None:
             logger.error(f"[CAM {cam_id}] no channel mapping")
             return False
+        logger.debug(f"[CAM {cam_id}] SDK channel={channel}")
 
         vod = NET_DVR_VOD_PARA()
         ctypes.memset(byref(vod), 0, sizeof(vod))
         vod.dwSize               = sizeof(vod)
-        vod.struIDInfo.dwSize    = sizeof(NET_DVR_STREAM_INFO)
-        vod.struIDInfo.dwChannel = channel
+        vod.struIDInfo.dwSize       = sizeof(NET_DVR_STREAM_INFO)
+        vod.struIDInfo.dwChannel    = channel
+        vod.struIDInfo.byStreamType = 1  # 0=main stream, 1=sub stream
         vod.struBeginTime        = _dt_to_sdk(start_dt)
         vod.struEndTime          = _dt_to_sdk(stop_dt)
         vod.hWnd                 = None

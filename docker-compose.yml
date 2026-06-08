@@ -46,7 +46,7 @@ services:
       retries: 5
 
   api:
-    image: nth100702/qr-api:v2
+    image: nth100702/qr-api:latest
     container_name: qr_api
     build:
       context: .
@@ -68,7 +68,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1500m   # scan workers (3×detect) + ondemand + API
+          memory: 3000m   # 3×detect (~900m) + 4×DL + API + ondemand
           cpus: '3.5'
     environment:
       - LD_LIBRARY_PATH=/app/sdk/lib

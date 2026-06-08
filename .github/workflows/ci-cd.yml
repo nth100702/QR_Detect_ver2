@@ -1,0 +1,94 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Syntax check
+        run: python -m py_compile api/main.py core/config.py core/nvr.py scanner/state.py scanner/detect.py scanner/downloader.py ondemand/clipper.py
+
+      - name: Import check
+        run: |
+          python -c "
+          import sys, os
+          os.environ.setdefault('NVR_HOST', 'localhost')
+          os.environ.setdefault('NVR_PASS', 'test')
+          os.environ.setdefault('DATABASE_URL', 'postgresql://u:p@localhost/db')
+          os.environ.setdefault('REDIS_URL', 'redis://localhost:6379/0')
+          os.environ.setdefault('API_SECRET', 'test')
+          os.environ.setdefault('VIEWER_SECRET', 'test')
+          from core import config, models
+          from scanner import state
+          print('imports OK')
+          "
+
+  build-push:
+    name: Build & push Docker image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/qr-api
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: SSH & deploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd ~/app
+            docker compose pull api
+            docker compose up -d --no-deps api
+            docker image prune -f

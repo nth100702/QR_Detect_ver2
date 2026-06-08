@@ -14,3 +14,4 @@ temp_videos/
 test_run.py
 test_nvr_concurrency.py
 benchmark_test.py
+docker-compose.yml

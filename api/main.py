@@ -49,6 +49,7 @@ from scanner.state import (
     set_shift_started, set_shift_finished, update_job_counters,
     set_cam_downloading, set_cam_chunk_progress,
     set_cam_detecting, set_cam_done, set_cam_error,
+    clear_stale_jobs,
 )
 
 # ── Logger ───────────────────────────────────────────────────────
@@ -603,7 +604,7 @@ async def scan_date_bulk(
     end_minute:    int = 0,
     job_id:        str = "",
     nvr_channels:  int = NVR_CHANNELS,
-    segment_hours: int = SEGMENT_HOURS,
+    segment_hours: float = SEGMENT_HOURS,
 ) -> int:
     from core.nvr import get_playback
     from scanner.detect import _detect_video, _post_scan
@@ -1095,7 +1096,6 @@ async def _run_scan_job(job: dict):
             end_hour     = eh,
             start_minute = sm,
             end_minute   = em,
-            label        = label,
             job_id       = job_id,
         )
     except asyncio.CancelledError:
@@ -1247,8 +1247,11 @@ async def lifespan(app: FastAPI):
     await db.init_pool()
     logger.info("DB pool ready")
 
+    clear_stale_jobs()
+    logger.info("Stale jobs cleared")
+
     try:
-        r = aioredis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2)
+        r = aioredis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2, socket_timeout=None)
         await r.ping()
         _redis = r
         logger.info("Redis ready")
@@ -1797,4 +1800,4 @@ if __name__ == "__main__":
     import uvicorn
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    uvicorn.run("api:app", host=API_HOST, port=API_PORT, reload=False)
+    uvicorn.run("api.main:app", host=API_HOST, port=API_PORT, reload=False)

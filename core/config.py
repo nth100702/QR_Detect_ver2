@@ -12,11 +12,6 @@ NVR_PORT = int(os.environ.get("NVR_PORT", "8000"))
 NVR_USER = os.environ.get("NVR_USER", "trunghieu")
 NVR_PASS = os.environ["NVR_PASS"]
 
-CHANNEL_MAP: dict[int, int] = {
-    1: 1,
-    5: 5,
-}
-
 # ── HCNetSDK ─────────────────────────────────────────────────────
 SDK_PATH = os.environ.get(
     "HCNET_SDK_PATH",
@@ -27,7 +22,7 @@ SDK_PATH = os.environ.get(
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 # ── Redis ────────────────────────────────────────────────────────
-REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+REDIS_URL = os.environ["REDIS_URL"]
 
 # ── API ──────────────────────────────────────────────────────────
 API_HOST     = os.environ.get("API_HOST", "0.0.0.0")
@@ -49,9 +44,9 @@ for _d in (TEMP_VIDEO_DIR, TEMP_CLIP_DIR, LOG_DIR):
 CHUNK_MINUTES     = 5
 SEMAPHORE_COUNT   = 6
 DETECT_SAMPLE_FPS = 0.5
-DETECT_WORKERS    = 6
-NVR_CHANNELS      = 1
-SEGMENT_HOURS     = 1
+DETECT_WORKERS    = 3   # CPU-bound: 4 core → 3 workers, giữ 1 core cho API/DL
+NVR_CHANNELS      = 4   # I/O-bound: tăng lên 4, test thêm nếu NVR chịu được
+SEGMENT_HOURS     = 0.5
 CLIP_MIN_DURATION = 30
 
 # ── QR ───────────────────────────────────────────────────────────
