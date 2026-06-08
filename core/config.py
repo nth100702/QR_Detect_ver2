@@ -46,7 +46,7 @@ SEMAPHORE_COUNT   = 6
 DETECT_SAMPLE_FPS = 0.5
 DETECT_WORKERS    = 3   # CPU-bound: 4 core → 3 workers, giữ 1 core cho API/DL
 NVR_CHANNELS      = 4   # I/O-bound: tăng lên 4, test thêm nếu NVR chịu được
-SEGMENT_HOURS     = 0.5
+SEGMENT_HOURS     = 0.333  # 20 phút
 CLIP_MIN_DURATION = 30
 
 # ── QR ───────────────────────────────────────────────────────────
