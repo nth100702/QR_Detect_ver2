@@ -176,7 +176,7 @@ class HikvisionPlayback:
         vod.dwSize               = sizeof(vod)
         vod.struIDInfo.dwSize       = sizeof(NET_DVR_STREAM_INFO)
         vod.struIDInfo.dwChannel    = channel
-        vod.struIDInfo.byStreamType = 1  # 0=main stream, 1=sub stream
+        vod.struIDInfo.byStreamType = 0  # 0=main stream, 1=sub stream
         vod.struBeginTime        = _dt_to_sdk(start_dt)
         vod.struEndTime          = _dt_to_sdk(stop_dt)
         vod.hWnd                 = None
@@ -216,6 +216,7 @@ class HikvisionPlayback:
 
         t0          = time.monotonic()
         last_pct    = 0
+        last_size   = 0
         stall_since = time.monotonic()
         success     = False
         cancelled   = False
@@ -230,12 +231,17 @@ class HikvisionPlayback:
             pct = sdk.NET_DVR_GetDownloadPos(handle)
             if pct == POS_ERROR:
                 break
-            if pct > last_pct:
-                last_pct = pct; stall_since = time.monotonic()
-            if (time.monotonic() - stall_since) > self.STALL_WINDOW_SEC and pct < POS_DONE:
-                logger.error(f"[CAM {cam_id}] Stall at {pct}%"); break
             if pct >= POS_DONE:
                 success = True; break
+
+            # dùng file size growth làm stall indicator
+            # vì một số NVR giữ GetDownloadPos=0 suốt quá trình tải
+            cur_size = output_path.stat().st_size if output_path.exists() else 0
+            if pct > last_pct or cur_size > last_size:
+                last_pct = pct; last_size = cur_size; stall_since = time.monotonic()
+            if (time.monotonic() - stall_since) > self.STALL_WINDOW_SEC:
+                logger.error(f"[CAM {cam_id}] Stall at {pct}% ({cur_size//1024//1024}MB written)"); break
+
             time.sleep(self.POLL_INTERVAL_SEC)
 
         sdk.NET_DVR_StopPlayBack(handle)
