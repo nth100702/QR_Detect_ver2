@@ -64,7 +64,7 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/qr-api
           tags: |
-            type=raw,value=latest
+            type=raw,value=v2
             type=sha,prefix=,format=short
 
       - name: Build and push
@@ -91,6 +91,6 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             cd ~/app
-            docker compose pull api
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/qr-api:v2
             docker compose up -d --no-deps api
             docker image prune -f

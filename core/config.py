@@ -43,14 +43,11 @@ for _d in (TEMP_VIDEO_DIR, TEMP_CLIP_DIR, LOG_DIR):
 # ── Scanner ──────────────────────────────────────────────────────
 CHUNK_MINUTES     = 5
 SEMAPHORE_COUNT   = 6
-DETECT_SAMPLE_FPS = 0.5
+DETECT_SAMPLE_FPS = 1.0
 DETECT_WORKERS    = 3   # CPU-bound: 4 core → 3 workers, giữ 1 core cho API/DL
 NVR_CHANNELS      = 4   # I/O-bound: tăng lên 4, test thêm nếu NVR chịu được
 SEGMENT_HOURS     = 0.5    # 30 phút
 CLIP_MIN_DURATION = 30
-
-# ── QR ───────────────────────────────────────────────────────────
-QR_VALID_PREFIX = "SPXVN"
 
 # ── Ca làm việc (dùng cho APScheduler) ───────────────────────────
 @dataclass

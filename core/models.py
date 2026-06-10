@@ -41,19 +41,24 @@ LUNCH_START = dtime(12, 0)
 LUNCH_END   = dtime(13, 0)
 WORK_END    = dtime(17, 0)
 
-QR_VALID_PREFIX   = ""
-QR_INVALID_PREFIX = ""
-
-
 def is_valid_qr(qr: str) -> bool:
     v = qr.strip()
-    if not v or not v[0].isalpha() or "@" in v:
+    if not v:
         return False
-    if QR_INVALID_PREFIX and v.startswith(QR_INVALID_PREFIX):
+    low = v.lower()
+    if "@" in v:
         return False
-    if QR_VALID_PREFIX:
-        return v.startswith(QR_VALID_PREFIX)
-    return True
+    if "://" in v or low.startswith(("http", "www.")):
+        return False
+    # GS1 barcode dạng (01)...
+    if v.startswith("("):
+        return False
+    # chấp nhận: bắt đầu chữ cái, hoặc thuần số dài >= 6
+    if v[0].isalpha():
+        return True
+    if v.isdigit() and len(v) >= 6:
+        return True
+    return False
 
 
 def get_shift(dt: datetime) -> str:
