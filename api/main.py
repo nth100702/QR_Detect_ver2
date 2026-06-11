@@ -603,6 +603,7 @@ async def scan_date_bulk(
     start_minute:  int = 0,
     end_minute:    int = 0,
     job_id:        str = "",
+    label:         str = "",
     nvr_channels:  int = NVR_CHANNELS,
     segment_hours: float = SEGMENT_HOURS,
 ) -> int:
@@ -658,7 +659,8 @@ async def scan_date_bulk(
         f"[bulk] {len(cam_ids)} cam → {total_jobs} segment jobs | "
         f"nvr_channels={nvr_channels} detect_workers={DETECT_WORKERS} job_id={job_id}"
     )
-    set_shift_started(f"bulk {target_date:%Y-%m-%d}", target_date.strftime("%Y-%m-%d"), cam_ids, job_id=job_id, segments_total=total_jobs)
+    _label = label or f"bulk {target_date:%Y-%m-%d}"
+    set_shift_started(_label, target_date.strftime("%Y-%m-%d"), cam_ids, job_id=job_id, segments_total=total_jobs)
 
     # ── Queues ──────────────────────────────────────────────────────
     dl_queue:     asyncio.Queue = asyncio.Queue()
@@ -923,6 +925,7 @@ async def run_daily_scan():
         start_hour    = 8,
         end_hour      = 19,
         job_id        = job_id,
+        label         = f"[Cron] {len(cam_ids)} cams · {today:%Y-%m-%d} 08:00–19:00",
         nvr_channels  = NVR_CHANNELS,
         segment_hours = SEGMENT_HOURS,
     )
@@ -1070,29 +1073,22 @@ async def _run_scan_job(job: dict):
     job_id = f"manual_{job['date']}_{job['start_time'].replace(':', '')}_{datetime.now(TZ):%H%M%S}"
     task_name = asyncio.current_task().get_name() if asyncio.current_task() else job_id
  
-    label = f"manual {job['date']} {job['start_time']}–{job['end_time']}"
+    cam_ids = job["cam_ids"]
+    cam_str = f"CAM {cam_ids[0]}" if len(cam_ids) == 1 else f"{len(cam_ids)} cams"
+    label   = f"[Manual] {cam_str} · {job['date']} {job['start_time']}–{job['end_time']}"
     try:
         sh, sm = map(int, job["start_time"].split(":"))
         eh, em = map(int, job["end_time"].split(":"))
         target = TZ.localize(datetime.strptime(job["date"], "%Y-%m-%d"))
-        # await scan_date(
-        #     cam_ids      = job["cam_ids"],
-        #     target_date  = target,
-        #     start_hour   = sh,
-        #     end_hour     = eh,
-        #     start_minute = sm,
-        #     end_minute   = em,
-        #     label        = label,
-        #     job_id       = job_id,   # ← BƯỚC 3
-        # )
         await scan_date_bulk(
-            cam_ids      = job["cam_ids"],
+            cam_ids      = cam_ids,
             target_date  = target,
             start_hour   = sh,
             end_hour     = eh,
             start_minute = sm,
             end_minute   = em,
             job_id       = job_id,
+            label        = label,
         )
     except asyncio.CancelledError:
         wlogger.warning(f"[{label}] bị cancel — đang cleanup folder...")
