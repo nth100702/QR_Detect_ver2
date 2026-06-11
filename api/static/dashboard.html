@@ -549,7 +549,6 @@ tailwind.config = {
         <thead>
           <!-- Admin: đủ cột -->
           <tr x-show="role === 'admin'" class="dark:bg-gray-800/60 bg-gray-50 text-xs dark:text-gray-400 text-gray-500 uppercase tracking-wide">
-            <th class="px-4 py-3 text-left font-semibold">ID</th>
             <th class="px-4 py-3 text-left font-semibold">Camera</th>
             <th class="px-4 py-3 text-left font-semibold">QR Value</th>
             <th class="px-4 py-3 text-left font-semibold">Thời điểm</th>
@@ -566,9 +565,8 @@ tailwind.config = {
         </thead>
         <!-- Admin tbody -->
         <tbody x-show="role === 'admin'" class="divide-y dark:divide-gray-800 divide-gray-100">
-          <template x-for="(row, idx) in qr.results" :key="row.id">
+          <template x-for="(row, idx) in qr.pagedResults()" :key="row.id">
             <tr class="tbl-row" :class="{ 'selected': qr.selected?.id === row.id }" @click="qr.select(row)">
-              <td class="px-4 py-2.5 font-mono text-xs dark:text-gray-400 text-gray-500" x-text="row.id"></td>
               <td class="px-4 py-2.5 text-xs font-medium" x-text="row.cam_name || ('CAM ' + row.cam_id)"></td>
               <td class="px-4 py-2.5 font-mono text-xs truncate max-w-[200px]" x-text="row.qr_value"></td>
               <td class="px-4 py-2.5 text-xs font-mono" x-text="fmtVN(row.detected_at)"></td>
@@ -582,7 +580,7 @@ tailwind.config = {
         </tbody>
         <!-- Viewer tbody -->
         <tbody x-show="role === 'viewer'" class="divide-y dark:divide-gray-800 divide-gray-100">
-          <template x-for="(row, idx) in qr.results" :key="row.id">
+          <template x-for="(row, idx) in qr.pagedResults()" :key="row.id">
             <tr class="dark:hover:bg-gray-800/40 hover:bg-gray-50 transition-colors">
               <td class="px-4 py-2.5 text-xs font-medium" x-text="row.cam_name || ('CAM ' + row.cam_id)"></td>
               <td class="px-4 py-2.5 font-mono text-xs truncate max-w-[200px]" x-text="row.qr_value"></td>
@@ -634,6 +632,25 @@ tailwind.config = {
           </template>
         </tbody>
       </table>
+      </div>
+    </div>
+
+    <!-- Pagination -->
+    <div class="flex items-center justify-between px-1 mb-4"
+         x-show="qr.results !== null && qr.results.length > qr.pageSize">
+      <span class="text-xs dark:text-gray-400 text-gray-500"
+            x-text="`${(qr.curPage-1)*qr.pageSize+1}–${Math.min(qr.curPage*qr.pageSize, qr.results.length)} / ${qr.results.length}`"></span>
+      <div class="flex items-center gap-1">
+        <button @click="qr.curPage = 1" :disabled="qr.curPage === 1"
+                class="px-2 py-1 rounded text-xs dark:bg-gray-800 bg-gray-100 disabled:opacity-30 hover:bg-gray-200 dark:hover:bg-gray-700">«</button>
+        <button @click="qr.curPage--" :disabled="qr.curPage === 1"
+                class="px-2 py-1 rounded text-xs dark:bg-gray-800 bg-gray-100 disabled:opacity-30 hover:bg-gray-200 dark:hover:bg-gray-700">‹</button>
+        <span class="px-3 py-1 rounded text-xs dark:bg-gray-700 bg-gray-200 font-mono"
+              x-text="`${qr.curPage} / ${Math.ceil(qr.results.length / qr.pageSize)}`"></span>
+        <button @click="qr.curPage++" :disabled="qr.curPage >= Math.ceil(qr.results.length / qr.pageSize)"
+                class="px-2 py-1 rounded text-xs dark:bg-gray-800 bg-gray-100 disabled:opacity-30 hover:bg-gray-200 dark:hover:bg-gray-700">›</button>
+        <button @click="qr.curPage = Math.ceil(qr.results.length / qr.pageSize)" :disabled="qr.curPage >= Math.ceil(qr.results.length / qr.pageSize)"
+                class="px-2 py-1 rounded text-xs dark:bg-gray-800 bg-gray-100 disabled:opacity-30 hover:bg-gray-200 dark:hover:bg-gray-700">»</button>
       </div>
     </div>
 
@@ -1628,6 +1645,12 @@ function app() {
       jobId: null, jobStatus: null, jobPct: 0, jobDone: false, jobError: null, jobClipFile: null,
       downloading: false,
       viewerJobs: {},
+      curPage: 1, pageSize: 20,
+      pagedResults() {
+        if (!this.results) return [];
+        const s = (this.curPage - 1) * this.pageSize;
+        return this.results.slice(s, s + this.pageSize);
+      },
 
       async downloadClip(scanId) {
         if (!scanId || this.downloading) return;
@@ -1652,7 +1675,7 @@ function app() {
 
       async search() {
         // Admin: luôn lọc theo ngày, optionally thêm qr_value
-        this.loading = true; this.selected = null; this.jobId = null;
+        this.loading = true; this.selected = null; this.jobId = null; this.curPage = 1;
         try {
           const params = new URLSearchParams();
           params.set('date', this.date);
@@ -1728,7 +1751,7 @@ function app() {
 
       async searchViewer() {
         // Viewer: tìm theo qr_value nếu có, không có → 10 QR gần nhất (không lọc ngày)
-        this.loading = true; this.selected = null; this.jobId = null;
+        this.loading = true; this.selected = null; this.jobId = null; this.curPage = 1;
         try {
           const params = new URLSearchParams();
           if (this.query.trim()) { params.set('qr_value', this.query.trim()); params.set('limit', '50'); }
