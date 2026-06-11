@@ -662,7 +662,7 @@ async def scan_date_bulk(
 
     # ── Queues ──────────────────────────────────────────────────────
     dl_queue:     asyncio.Queue = asyncio.Queue()
-    detect_queue: asyncio.Queue = asyncio.Queue()  # unlimited — split parts có thể > total_jobs
+    detect_queue: asyncio.Queue = asyncio.Queue(maxsize=DETECT_WORKERS * 3)  # back-pressure: DL block khi detect chưa kịp
 
     for job in all_jobs:
         await dl_queue.put(job)
@@ -1115,6 +1115,17 @@ async def _run_scan_job(job: dict):
         raise
     except Exception as e:
         wlogger.exception(f"[{label}] lỗi: {e}")
+        my_dirs      = _active_dirs.pop(task_name, set())
+        other_active = _get_all_active_dirs()
+        for d in my_dirs:
+            if d in other_active:
+                continue
+            try:
+                if d.exists():
+                    shutil.rmtree(d, ignore_errors=True)
+                    wlogger.info(f"[{label}] Đã xóa folder sau lỗi: {d}")
+            except Exception:
+                pass
     finally:
         current = asyncio.current_task()
         _active_tasks.discard(current)
