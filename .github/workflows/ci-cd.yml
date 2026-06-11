@@ -89,6 +89,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          port: 26266
           script: |
             cd ~/app
             docker pull ${{ secrets.DOCKERHUB_USERNAME }}/qr-api:v2
