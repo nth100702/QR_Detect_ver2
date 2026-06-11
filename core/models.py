@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime
 from typing import Optional
@@ -41,24 +42,21 @@ LUNCH_START = dtime(12, 0)
 LUNCH_END   = dtime(13, 0)
 WORK_END    = dtime(17, 0)
 
+_QR_ALLOWED  = re.compile(r'^[A-Za-z0-9._]+$')
+_QR_HAS_ALNUM = re.compile(r'[A-Za-z0-9]')
+
 def is_valid_qr(qr: str) -> bool:
     v = qr.strip()
     if not v:
         return False
-    low = v.lower()
-    if "@" in v:
+    if not _QR_ALLOWED.match(v):
         return False
-    if "://" in v or low.startswith(("http", "www.")):
+    if not _QR_HAS_ALNUM.search(v):
         return False
-    # GS1 barcode dạng (01)...
-    if v.startswith("("):
+    # thuần số phải đủ 6 ký tự trở lên
+    if v.replace(".", "").replace("_", "").isdigit() and len(v) < 6:
         return False
-    # chấp nhận: bắt đầu chữ cái, hoặc thuần số dài >= 6
-    if v[0].isalpha():
-        return True
-    if v.isdigit() and len(v) >= 6:
-        return True
-    return False
+    return True
 
 
 def get_shift(dt: datetime) -> str:
