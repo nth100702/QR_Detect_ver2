@@ -1644,7 +1644,19 @@ async def trigger_scan(body: ScanTrigger, _=Depends(verify_admin)):
  
     if not body.cam_ids:
         raise HTTPException(400, "cam_ids không được rỗng")
- 
+
+    MAX_CAMS_PER_TRIGGER  = 10
+    MAX_MANUAL_JOBS_TOTAL = 3
+
+    if len(body.cam_ids) > MAX_CAMS_PER_TRIGGER:
+        raise HTTPException(400, f"Tối đa {MAX_CAMS_PER_TRIGGER} cam mỗi lần trigger (nhận {len(body.cam_ids)}).")
+
+    manual_running = sum(
+        1 for t in _active_tasks if t.get_name().startswith("manual_")
+    )
+    if manual_running >= MAX_MANUAL_JOBS_TOTAL:
+        raise HTTPException(429, f"Đang có {manual_running} manual job chạy. Tối đa {MAX_MANUAL_JOBS_TOTAL}, chờ job xong hoặc cancel bớt.")
+
     # ── BƯỚC 4: Phát hiện conflict ────────────────────────────────
     date_key  = body.date.replace("-", "")
     conflicts = [
