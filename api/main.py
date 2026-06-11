@@ -1204,6 +1204,7 @@ async def _run_ondemand_worker(redis: aioredis.Redis):
             })
 
             clip_files = []
+            job_error  = None
             for idx, rec in enumerate(records):
                 from datetime import timezone, timedelta as _td
                 ICT = timezone(_td(hours=7))
@@ -1211,7 +1212,18 @@ async def _run_ondemand_worker(redis: aioredis.Redis):
                 if detected_at.tzinfo is not None:
                     detected_at = detected_at.astimezone(ICT).replace(tzinfo=None)
 
-                clip_path = await fetch_clip(job_id, rec["scan_id"], rec["cam_id"], detected_at, qr_value)
+                try:
+                    clip_path = await fetch_clip(job_id, rec["scan_id"], rec["cam_id"], detected_at, qr_value)
+                except Exception as e:
+                    job_error = str(e)
+                    logger.error(f"[ondemand] JOB {job_id} fetch_clip failed: {e}")
+                    await _set_status(job_id, {
+                        "job_id": job_id, "status": "error",
+                        "qr_value": qr_value, "total": len(records),
+                        "done": idx, "error_msg": job_error,
+                    })
+                    break
+
                 if clip_path:
                     clip_files.append(str(clip_path))
                     async with httpx.AsyncClient(base_url=f"http://localhost:{API_PORT}", timeout=10) as client:
@@ -1229,12 +1241,13 @@ async def _run_ondemand_worker(redis: aioredis.Redis):
                     "qr_value": qr_value, "total": len(records), "done": idx + 1,
                 })
 
-            await _set_status(job_id, {
-                "job_id": job_id, "status": "done",
-                "qr_value": qr_value, "total": len(records),
-                "done": len(records), "clip_files": clip_files,
-            })
-            logger.info(f"[ondemand] JOB {job_id} done | {len(clip_files)}/{len(records)} clips")
+            if not job_error:
+                await _set_status(job_id, {
+                    "job_id": job_id, "status": "done",
+                    "qr_value": qr_value, "total": len(records),
+                    "done": len(records), "clip_files": clip_files,
+                })
+                logger.info(f"[ondemand] JOB {job_id} done | {len(clip_files)}/{len(records)} clips")
 
         except aioredis.RedisError as e:
             logger.error(f"[ondemand] Redis error: {e}, retrying in 5s")
