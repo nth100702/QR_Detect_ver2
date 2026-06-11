@@ -982,22 +982,13 @@ async def cleanup_empty_dirs():
 CLIP_MAX_AGE_HOURS = 24     # xóa footage on-demand cũ hơn 24h
 CLIP_MAX_SIZE_GB   = 10     # nếu thư mục vượt 10GB → xóa file cũ nhất trước
 
-def _cleanup_stale_clips(max_age_hours: int = 2, skip_dirs: set | None = None) -> int:
-    """
-    Xóa clip on-demand (.mp4) trong TEMP_VIDEO_DIR cũ hơn max_age_hours giờ.
-    On-demand clip được nhận biết bằng mtime, không phải chunk_ prefix
-    (chunk_ đã bị xóa ngay sau detect; clip on-demand là file còn sót lại).
-
-    Lý do chọn 2 giờ:
-      - Ca dài nhất ~12h → clip on-demand tải về dùng xem ngay, 2h là đủ
-      - Không xóa quá sớm phòng client đang stream
-      - Không để quá lâu (disk drain)
-    """
+async def _cleanup_stale_clips(max_age_hours: int = 2, skip_dirs: set | None = None) -> int:
     skip_dirs = skip_dirs or set()
     removed   = 0
     cutoff    = datetime.now().timestamp() - max_age_hours * 3600
     if not TEMP_CLIP_DIR.exists():
         return 0
+    pool = db.get_pool()
     for mp4 in TEMP_CLIP_DIR.rglob("*.mp4"):
         if not mp4.is_file():
             continue
@@ -1008,6 +999,11 @@ def _cleanup_stale_clips(max_age_hours: int = 2, skip_dirs: set | None = None) -
                 mp4.unlink(missing_ok=True)
                 wlogger.info(f"[Cleanup] Xóa clip cũ ({max_age_hours}h): {mp4}")
                 removed += 1
+                if pool:
+                    await pool.execute(
+                        "UPDATE qr_scans SET clip_file = NULL WHERE clip_file = $1",
+                        str(mp4),
+                    )
         except Exception as e:
             wlogger.warning(f"[Cleanup] Không thể xóa {mp4}: {e}")
     return removed
@@ -1017,7 +1013,7 @@ async def run_periodic_cleanup():
     active = _get_all_active_dirs()
     wlogger.info(f"[Cleanup] Bắt đầu | active_dirs={len(active)}")
     n_dirs  = _cleanup_empty_date_dirs(skip_dirs=active)
-    n_clips = _cleanup_stale_clips(max_age_hours=24, skip_dirs=active)  # ← đổi 2 → 24
+    n_clips = await _cleanup_stale_clips(max_age_hours=24, skip_dirs=active)
     n_size  = await asyncio.to_thread(_cleanup_clips_by_size)
     wlogger.info(f"[Cleanup] Xong | dirs_removed={n_dirs} clips_removed={n_clips} size_removed={n_size}")
 
@@ -1215,7 +1211,7 @@ async def _run_ondemand_worker(redis: aioredis.Redis):
                 if detected_at.tzinfo is not None:
                     detected_at = detected_at.astimezone(ICT).replace(tzinfo=None)
 
-                clip_path = await fetch_clip(job_id, rec["scan_id"], rec["cam_id"], detected_at)
+                clip_path = await fetch_clip(job_id, rec["scan_id"], rec["cam_id"], detected_at, qr_value)
                 if clip_path:
                     clip_files.append(str(clip_path))
                     async with httpx.AsyncClient(base_url=f"http://localhost:{API_PORT}", timeout=10) as client:
@@ -1693,7 +1689,7 @@ async def download_clip(scan_id: int, _=Depends(verify_secret)):
     # 3. File có tồn tại không? Nếu không → tự null DB để UI không hiện stale
     if not path.exists():
         await pool.execute(
-            "UPDATE qr_scans SET clip_file = NULL WHERE id = ", scan_id
+            "UPDATE qr_scans SET clip_file = NULL WHERE id = $1", scan_id
         )
         raise HTTPException(404, "Clip đã bị xóa khỏi server (đã cập nhật trạng thái).")
 
@@ -1784,7 +1780,7 @@ async def manual_cleanup(_=Depends(verify_admin)):
     """
     active = _get_all_active_dirs()
     n_dirs  = _cleanup_empty_date_dirs(skip_dirs=active)
-    n_clips = _cleanup_stale_clips(max_age_hours=2, skip_dirs=active)
+    n_clips = await _cleanup_stale_clips(max_age_hours=2, skip_dirs=active)
     logger.info(f"[ManualCleanup] dirs_removed={n_dirs} clips_removed={n_clips}")
     return {
         "msg":           "Cleanup hoàn tất",
@@ -1797,7 +1793,7 @@ async def manual_cleanup(_=Depends(verify_admin)):
 
 @app.post("/debug/clip-cleanup")
 async def debug_clip_cleanup(_=Depends(verify_admin)):
-    n_clips = await asyncio.to_thread(_cleanup_stale_clips, 24)
+    n_clips = await _cleanup_stale_clips(max_age_hours=24)
     n_size  = await asyncio.to_thread(_cleanup_clips_by_size)
     return {
         "clips_removed": n_clips,
