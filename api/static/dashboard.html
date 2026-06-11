@@ -1328,18 +1328,20 @@ tailwind.config = {
         </div>
 
         <!-- Date/time -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
-          <div class="min-w-0">
+        <div class="mb-4 space-y-2">
+          <div>
             <span class="label">Ngày footage</span>
-            <input type="date" x-model="trig.date" class="inp text-sm w-full min-w-0 max-w-full" />
+            <input type="date" x-model="trig.date" class="inp text-sm w-full" />
           </div>
-          <div class="min-w-0">
-            <span class="label">Từ giờ</span>
-            <input type="time" x-model="trig.startTime" class="inp text-sm w-full min-w-0 max-w-full" />
-          </div>
-          <div class="min-w-0">
-            <span class="label">Đến giờ</span>
-            <input type="time" x-model="trig.endTime" class="inp text-sm w-full min-w-0 max-w-full" />
+          <div class="grid grid-cols-2 gap-2">
+            <div class="min-w-0">
+              <span class="label">Từ giờ</span>
+              <input type="time" x-model="trig.startTime" class="inp text-sm w-full min-w-0" />
+            </div>
+            <div class="min-w-0">
+              <span class="label">Đến giờ</span>
+              <input type="time" x-model="trig.endTime" class="inp text-sm w-full min-w-0" />
+            </div>
           </div>
         </div>
 
