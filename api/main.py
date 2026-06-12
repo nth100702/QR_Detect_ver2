@@ -612,6 +612,7 @@ async def scan_date_bulk(
     from core.config import DETECT_WORKERS
     from concurrent.futures import ThreadPoolExecutor
 
+    await refresh_channel_map()
     playback  = get_playback()
     task_name = asyncio.current_task().get_name() if asyncio.current_task() else "_scheduler"
 
