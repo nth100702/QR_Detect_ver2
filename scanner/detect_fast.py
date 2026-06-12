@@ -296,7 +296,7 @@ def detect_video_fast(
     Trả về list[dict] scan giống format cũ.
     """
     if hwaccel is None:
-        hwaccel = _detect_hwaccel()
+        hwaccel = _detect_hwaccel(probe_file=video_path)
 
     duration = _get_video_duration(video_path)
     expected_frames = int(duration / sample_interval) + 1
