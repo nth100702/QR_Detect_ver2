@@ -608,7 +608,8 @@ async def scan_date_bulk(
     segment_hours: float = SEGMENT_HOURS,
 ) -> int:
     from core.nvr import get_playback
-    from scanner.detect import _detect_video, _post_scan
+    from scanner.detect import _post_scan
+    from scanner.detect_fast import detect_video_fast as _detect_video
     from core.config import DETECT_WORKERS
     from concurrent.futures import ThreadPoolExecutor
 
