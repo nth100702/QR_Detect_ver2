@@ -54,7 +54,7 @@ OUTPUT_WIDTH = 1920
 LOOKBACK_FRAMES = 3     # số frame lookback sau khi bắt được QR lần đầu
 
 # Cooldown dedup
-QR_COOLDOWN_SEC = 4 * 3600
+QR_COOLDOWN_SEC = 4 * 60
 
 # ── Hardware acceleration ─────────────────────────────────────────────────────
 # Thứ tự ưu tiên trên Windows: cuda > d3d11va (decode-only, tốt) > qsv > software

@@ -118,6 +118,12 @@ _active_dirs:    dict[str, set]     = {}
 _cam_locks: dict[str, asyncio.Lock] = {}
 _cancel_events: dict[str, threading.Event] = {}
 
+# ── Daily cron guard: chỉ cho 1 cron_daily chạy tại 1 thời điểm ─
+# Nếu job trước chưa xong, ngày mới đẩy vào _pending_scan_dates
+# và sẽ được xử lý backfill ngay sau khi job hiện tại hoàn thành.
+_daily_scan_running: bool       = False
+_pending_scan_dates: list[str]  = []   # ISO date strings "YYYY-MM-DD", FIFO
+
 def get_scan_trigger_queue() -> asyncio.Queue:
     return _scan_queue
 
@@ -907,8 +913,55 @@ async def run_shift(shift_name: str):
         job_id      = job_id,   # ← BƯỚC 3
     )
 
+async def _daily_scan_worker(first_date: datetime, first_cam_ids: list[int]):
+    """Task chạy nền: xử lý first_date, rồi drain hết _pending_scan_dates."""
+    global _daily_scan_running
+
+    async def _scan_one(target_date: datetime, cam_ids: list[int]):
+        job_id = f"cron_daily_{target_date:%Y%m%d}"
+        wlogger.info(f"[daily] {len(cam_ids)} cam | date={target_date:%Y-%m-%d} | job_id={job_id}")
+        await scan_date_bulk(
+            cam_ids       = cam_ids,
+            target_date   = target_date,
+            start_hour    = 8,
+            end_hour      = 19,
+            job_id        = job_id,
+            label         = f"[Cron] {len(cam_ids)} cams · {target_date:%Y-%m-%d} 08:00–19:00",
+            nvr_channels  = NVR_CHANNELS,
+            segment_hours = SEGMENT_HOURS,
+        )
+        wlogger.info(f"[daily] job xong: {target_date:%Y-%m-%d}")
+
+    try:
+        await _scan_one(first_date, first_cam_ids)
+    except Exception as e:
+        wlogger.error(f"[daily] {first_date:%Y-%m-%d} lỗi: {e}")
+
+    # Backfill: drain queue các ngày bị miss khi job này đang chạy
+    while _pending_scan_dates:
+        pending_date_str = _pending_scan_dates.pop(0)
+        wlogger.info(f"[daily] backfill ngày bị miss: {pending_date_str}")
+        try:
+            pending_date = TZ.localize(datetime.strptime(pending_date_str, "%Y-%m-%d"))
+            pool = db.get_pool()
+            rows = await pool.fetch("SELECT id FROM cameras WHERE status = 'active'")
+            backfill_cam_ids = [r["id"] for r in rows]
+            if backfill_cam_ids:
+                await _scan_one(pending_date, backfill_cam_ids)
+        except Exception as e:
+            wlogger.error(f"[daily] backfill {pending_date_str} lỗi: {e}")
+
+    _daily_scan_running = False
+
+
 async def run_daily_scan():
-    """Cron job chạy 1 lần/ngày — xử lý toàn bộ 60 cam, không chia ca."""
+    """Cron job chạy 1 lần/ngày lúc 20:00 — xử lý toàn bộ cam active.
+
+    Nếu job trước chưa xong, ngày hôm nay được enqueue vào _pending_scan_dates
+    để chạy backfill ngay sau khi job hiện tại hoàn thành (không chạy song song).
+    """
+    global _daily_scan_running
+
     pool = db.get_pool()
     rows = await pool.fetch("SELECT id FROM cameras WHERE status = 'active'")
     cam_ids = [r["id"] for r in rows]
@@ -918,18 +971,23 @@ async def run_daily_scan():
         return
 
     today = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-    job_id = f"cron_daily_{datetime.now(TZ):%Y%m%d_%H%M}"
-    wlogger.info(f"[daily] {len(cam_ids)} cam | job_id={job_id}")
+    today_str = today.strftime("%Y-%m-%d")
 
-    await scan_date_bulk(
-        cam_ids       = cam_ids,
-        target_date   = today,
-        start_hour    = 8,
-        end_hour      = 19,
-        job_id        = job_id,
-        label         = f"[Cron] {len(cam_ids)} cams · {today:%Y-%m-%d} 08:00–19:00",
-        nvr_channels  = NVR_CHANNELS,
-        segment_hours = SEGMENT_HOURS,
+    if _daily_scan_running:
+        if today_str not in _pending_scan_dates:
+            _pending_scan_dates.append(today_str)
+            wlogger.warning(
+                f"[daily] Job trước chưa xong — enqueue backfill cho {today_str} "
+                f"(pending queue: {_pending_scan_dates})"
+            )
+        else:
+            wlogger.warning(f"[daily] {today_str} đã có trong pending queue, bỏ qua")
+        return
+
+    _daily_scan_running = True
+    asyncio.create_task(
+        _daily_scan_worker(today, cam_ids),
+        name=f"cron_daily_{today:%Y%m%d}",
     )
 
 
@@ -1290,12 +1348,12 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler(timezone=TZ)
     scheduler.add_job(
         run_daily_scan,
-        CronTrigger(hour=20, minute=0, timezone=TZ),
+        CronTrigger(hour=19, minute=0, timezone=TZ),
         id="daily_scan",
         misfire_grace_time=3600,
         replace_existing=True,
     )
-    logger.info("Scheduled daily scan at 20:00 ICT")
+    logger.info("Scheduled daily scan at 19:00 ICT")
 
     scheduler.add_job(
         run_periodic_cleanup,
