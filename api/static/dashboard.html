@@ -550,32 +550,32 @@ tailwind.config = {
     <!-- Table — PenguinUI table component -->
     <div class="card overflow-hidden mb-4" x-show="qr.results !== null && qr.results.length > 0">
       <div class="overflow-x-auto">
-      <table class="w-full text-sm min-w-[560px]">
+      <table class="w-full text-sm min-w-[560px] table-fixed">
         <thead>
           <!-- Admin: đủ cột -->
           <tr x-show="role === 'admin'" class="dark:bg-gray-800/60 bg-gray-50 text-xs dark:text-gray-400 text-gray-500 uppercase tracking-wide">
-            <th class="px-4 py-3 text-left font-semibold">Camera</th>
-            <th class="px-4 py-3 text-left font-semibold">QR Value</th>
-            <th class="px-4 py-3 text-left font-semibold">Thời điểm</th>
-            <th class="px-4 py-3 text-left font-semibold">Ca</th>
-            <th class="px-4 py-3 text-center font-semibold">Clip</th>
+            <th class="px-4 py-3 text-left font-semibold w-36">Camera</th>
+            <th class="px-4 py-3 text-left font-semibold w-40">QR Value</th>
+            <th class="px-4 py-3 text-left font-semibold w-44">Thời điểm</th>
+            <th class="px-4 py-3 text-left font-semibold w-20">Ca</th>
+            <th class="px-4 py-3 text-center font-semibold w-24">Clip</th>
           </tr>
           <!-- Viewer: Camera + QR + Thời gian + Tải -->
           <tr x-show="role === 'viewer'" class="dark:bg-gray-800/60 bg-gray-50 text-xs dark:text-gray-400 text-gray-500 uppercase tracking-wide">
-            <th class="px-4 py-3 text-left font-semibold">Camera</th>
-            <th class="px-4 py-3 text-left font-semibold">QR Value</th>
-            <th class="px-4 py-3 text-left font-semibold">Thời gian</th>
-            <th class="px-4 py-3 text-center font-semibold">Tải clip</th>
+            <th class="px-4 py-3 text-left font-semibold w-36">Camera</th>
+            <th class="px-4 py-3 text-left font-semibold w-40">QR Value</th>
+            <th class="px-4 py-3 text-left font-semibold w-44">Thời gian</th>
+            <th class="px-4 py-3 text-center font-semibold w-28">Tải clip</th>
           </tr>
         </thead>
         <!-- Admin tbody -->
         <tbody x-show="role === 'admin'" class="divide-y dark:divide-gray-800 divide-gray-100">
           <template x-for="(row, idx) in qr.results" :key="row.id">
             <tr class="tbl-row" :class="{ 'selected': qr.selected?.id === row.id }" @click="qr.select(row)">
-              <td class="px-4 py-2.5 text-xs font-medium" x-text="row.cam_name || ('CAM ' + row.cam_id)"></td>
-              <td class="px-4 py-2.5 font-mono text-xs truncate max-w-[200px]" x-text="row.qr_value"></td>
-              <td class="px-4 py-2.5 text-xs font-mono" x-text="fmtVN(row.detected_at)"></td>
-              <td class="px-4 py-2.5 text-xs" x-text="(row.shift || '').toLowerCase() === 'morning' ? '🌅 Sáng' : '🌙 Tối'"></td>
+              <td class="px-4 py-2.5 text-xs font-medium truncate" x-text="row.cam_name || ('CAM ' + row.cam_id)"></td>
+              <td class="px-4 py-2.5 font-mono text-xs truncate" x-text="row.qr_value"></td>
+              <td class="px-4 py-2.5 text-xs font-mono truncate" x-text="fmtVN(row.detected_at)"></td>
+              <td class="px-4 py-2.5 text-xs truncate" x-text="(row.shift || '').toLowerCase() === 'morning' ? '🌅 Sáng' : '🌙 Tối'"></td>
               <td class="px-4 py-2.5 text-center">
                 <svg x-show="row.clip_file" class="icon-md text-green-400 mx-auto"><use href="#icon-check-circle"/></svg>
                 <span x-show="!row.clip_file" class="text-gray-400">—</span>
@@ -587,10 +587,10 @@ tailwind.config = {
         <tbody x-show="role === 'viewer'" class="divide-y dark:divide-gray-800 divide-gray-100">
           <template x-for="(row, idx) in qr.results" :key="row.id">
             <tr class="dark:hover:bg-gray-800/40 hover:bg-gray-50 transition-colors">
-              <td class="px-4 py-2.5 text-xs font-medium" x-text="row.cam_name || ('CAM ' + row.cam_id)"></td>
-              <td class="px-4 py-2.5 font-mono text-xs truncate max-w-[200px]" x-text="row.qr_value"></td>
-              <td class="px-4 py-2.5 text-xs font-mono dark:text-gray-400 text-gray-500" x-text="fmtVN(row.detected_at)"></td>
-              <td class="px-4 py-2.5 text-center min-w-[150px]">
+              <td class="px-4 py-2.5 text-xs font-medium truncate" x-text="row.cam_name || ('CAM ' + row.cam_id)"></td>
+              <td class="px-4 py-2.5 font-mono text-xs truncate" x-text="row.qr_value"></td>
+              <td class="px-4 py-2.5 text-xs font-mono dark:text-gray-400 text-gray-500 truncate" x-text="fmtVN(row.detected_at)"></td>
+              <td class="px-4 py-2.5 text-center">
                 <!-- Chua co job: nut Tai footage -->
                 <template x-if="!qr.viewerJobs[row.id]">
                   <button @click.stop="qr.viewerStartJob(row)"
