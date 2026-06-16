@@ -24,3 +24,8 @@ node_modules
 .cache
 *.json
 test_nvr_concurrency.py
+test_run.py
+test_detect.py
+testv2.py
+test_floor.py
+benchmark_test.py
