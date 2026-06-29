@@ -1477,6 +1477,11 @@ function app() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ secret: this.loginInput.trim() }),
         });
+        if (res.status === 429) {
+          const d = await res.json().catch(() => ({}));
+          this.loginError = d.detail || 'Quá nhiều lần thử. Vui lòng thử lại sau.';
+          return;
+        }
         if (!res.ok) { this.loginError = 'Secret không đúng. Thử lại.'; return; }
         const { token, role } = await res.json();
         setToken(token);

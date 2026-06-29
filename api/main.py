@@ -111,6 +111,43 @@ def _resolve_role(key: str) -> str:
         return "viewer"
     raise HTTPException(status_code=401, detail="Invalid secret")
 
+# ── Login rate limiter ────────────────────────────────────────────
+_LOGIN_MAX_ATTEMPTS = 5     # số lần sai tối đa
+_LOGIN_WINDOW_SEC   = 600   # trong 10 phút
+_LOGIN_BLOCK_SEC    = 900   # block 15 phút
+
+# { ip: {"attempts": int, "window_start": float, "blocked_until": float} }
+_login_attempts: dict[str, dict] = {}
+
+def _check_login_rate(ip: str):
+    import time
+    now = time.time()
+    state = _login_attempts.get(ip)
+
+    if state:
+        if now < state.get("blocked_until", 0):
+            retry_after = int(state["blocked_until"] - now)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Quá nhiều lần thử sai. Thử lại sau {retry_after // 60} phút {retry_after % 60} giây.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        # Reset window nếu đã qua 10 phút
+        if now - state["window_start"] > _LOGIN_WINDOW_SEC:
+            _login_attempts.pop(ip, None)
+
+def _record_login_fail(ip: str):
+    import time
+    now = time.time()
+    state = _login_attempts.setdefault(ip, {"attempts": 0, "window_start": now, "blocked_until": 0})
+    state["attempts"] += 1
+    if state["attempts"] >= _LOGIN_MAX_ATTEMPTS:
+        state["blocked_until"] = now + _LOGIN_BLOCK_SEC
+        logger.warning(f"[auth] IP {ip} bị block {_LOGIN_BLOCK_SEC}s sau {state['attempts']} lần sai")
+
+def _record_login_success(ip: str):
+    _login_attempts.pop(ip, None)
+
 def _get_role_from_request(
     creds: HTTPAuthorizationCredentials | None = Security(_bearer),
     api_key: str | None                        = Security(_api_key_header),
@@ -1636,8 +1673,15 @@ class LoginBody(BaseModel):
     secret: str
 
 @app.post("/auth/login")
-async def login(body: LoginBody):
-    role = _resolve_role(body.secret)
+async def login(body: LoginBody, request: Request):
+    ip = request.client.host
+    _check_login_rate(ip)
+    try:
+        role = _resolve_role(body.secret)
+    except HTTPException:
+        _record_login_fail(ip)
+        raise
+    _record_login_success(ip)
     token = _make_token(role)
     return {"token": token, "role": role, "expires_in": _JWT_TTL_SEC}
 
