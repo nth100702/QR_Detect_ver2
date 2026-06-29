@@ -69,8 +69,12 @@ logger  = logging.getLogger("api")
 wlogger = logging.getLogger("worker_scheduled")
 TZ      = pytz.timezone("Asia/Ho_Chi_Minh")
 
-QUEUE_KEY  = "jobs:ondemand"
-STATUS_TTL = 3600
+QUEUE_KEY        = "jobs:ondemand"
+PROCESSING_KEY   = "jobs:ondemand:processing"  # job đang xử lý (RPOPLPUSH safety)
+STATUS_TTL       = 3600
+SCAN_JOB_KEY     = "scan:active_job"   # hash: scan_id → job_id (dedup ondemand)
+CRON_CURRENT_KEY = "cron:current_date"  # date đang chạy "YYYY-MM-DD"
+CRON_PENDING_KEY = "cron:pending_dates" # list các ngày chờ backfill
 
 # ── Auth ─────────────────────────────────────────────────────────
 _api_key_header = APIKeyHeader(name="X-Secret", auto_error=True)
@@ -914,12 +918,30 @@ async def run_shift(shift_name: str):
     )
 
 async def _daily_scan_worker(first_date: datetime, first_cam_ids: list[int]):
-    """Task chạy nền: xử lý first_date, rồi drain hết _pending_scan_dates."""
+    """Task chạy nền: xử lý first_date, rồi drain hết _pending_scan_dates.
+    Lưu trạng thái vào Redis để resume khi container restart.
+    """
     global _daily_scan_running
+
+    async def _redis_set_current(date_str: str):
+        if _redis:
+            await _redis.set(CRON_CURRENT_KEY, date_str)
+
+    async def _redis_clear_current():
+        if _redis:
+            await _redis.delete(CRON_CURRENT_KEY)
+
+    async def _redis_sync_pending():
+        """Đồng bộ _pending_scan_dates vào Redis."""
+        if _redis:
+            await _redis.delete(CRON_PENDING_KEY)
+            if _pending_scan_dates:
+                await _redis.rpush(CRON_PENDING_KEY, *_pending_scan_dates)
 
     async def _scan_one(target_date: datetime, cam_ids: list[int]):
         job_id = f"cron_daily_{target_date:%Y%m%d}"
         wlogger.info(f"[daily] {len(cam_ids)} cam | date={target_date:%Y-%m-%d} | job_id={job_id}")
+        await _redis_set_current(target_date.strftime("%Y-%m-%d"))
         await scan_date_bulk(
             cam_ids       = cam_ids,
             target_date   = target_date,
@@ -940,6 +962,7 @@ async def _daily_scan_worker(first_date: datetime, first_cam_ids: list[int]):
     # Backfill: drain queue các ngày bị miss khi job này đang chạy
     while _pending_scan_dates:
         pending_date_str = _pending_scan_dates.pop(0)
+        await _redis_sync_pending()
         wlogger.info(f"[daily] backfill ngày bị miss: {pending_date_str}")
         try:
             pending_date = TZ.localize(datetime.strptime(pending_date_str, "%Y-%m-%d"))
@@ -951,11 +974,13 @@ async def _daily_scan_worker(first_date: datetime, first_cam_ids: list[int]):
         except Exception as e:
             wlogger.error(f"[daily] backfill {pending_date_str} lỗi: {e}")
 
+    await _redis_clear_current()
+    await _redis_sync_pending()
     _daily_scan_running = False
 
 
 async def run_daily_scan():
-    """Cron job chạy 1 lần/ngày lúc 20:00 — xử lý toàn bộ cam active.
+    """Cron job chạy 1 lần/ngày lúc 19:00 — xử lý toàn bộ cam active.
 
     Nếu job trước chưa xong, ngày hôm nay được enqueue vào _pending_scan_dates
     để chạy backfill ngay sau khi job hiện tại hoàn thành (không chạy song song).
@@ -976,6 +1001,8 @@ async def run_daily_scan():
     if _daily_scan_running:
         if today_str not in _pending_scan_dates:
             _pending_scan_dates.append(today_str)
+            if _redis:
+                await _redis.rpush(CRON_PENDING_KEY, today_str)
             wlogger.warning(
                 f"[daily] Job trước chưa xong — enqueue backfill cho {today_str} "
                 f"(pending queue: {_pending_scan_dates})"
@@ -1239,14 +1266,17 @@ async def _run_ondemand_worker(redis: aioredis.Redis):
 
     while True:
         try:
-            result = await redis.brpop(QUEUE_KEY, timeout=5)
-            if result is None:
+            # BRPOPLPUSH: atomic move từ main queue → processing queue
+            # Nếu container down giữa chừng, job vẫn còn trong PROCESSING_KEY
+            # và sẽ được requeue khi startup (xem lifespan)
+            raw = await redis.brpoplpush(QUEUE_KEY, PROCESSING_KEY, timeout=5)
+            if raw is None:
                 continue
-            _, raw = result
             try:
                 job = json.loads(raw)
             except json.JSONDecodeError as e:
                 logger.error(f"[ondemand] Invalid job JSON: {e}")
+                await redis.lrem(PROCESSING_KEY, 1, raw)
                 continue
 
             job_id   = job.get("job_id", "unknown")
@@ -1296,6 +1326,12 @@ async def _run_ondemand_worker(redis: aioredis.Redis):
                     "job_id": job_id, "status": "running",
                     "qr_value": qr_value, "total": len(records), "done": idx + 1,
                 })
+
+            # Xóa khỏi processing queue và dedup mapping khi job xong
+            await redis.lrem(PROCESSING_KEY, 1, raw)
+            scan_ids_done = [str(rec["scan_id"]) for rec in records if "scan_id" in rec]
+            if scan_ids_done:
+                await redis.hdel(SCAN_JOB_KEY, *scan_ids_done)
 
             if not job_error:
                 await _set_status(job_id, {
@@ -1401,8 +1437,38 @@ async def lifespan(app: FastAPI):
     trigger_task.add_done_callback(_on_trigger_task_done)
     logger.info("Scan trigger listener started")
 
+    # ── Resume cron từ Redis nếu container bị down giữa chừng ──────
+    if _redis:
+        current_date_str = await _redis.get(CRON_CURRENT_KEY)
+        pending_raw      = await _redis.lrange(CRON_PENDING_KEY, 0, -1)
+
+        if current_date_str:
+            wlogger.warning(f"[startup] Phát hiện cron bị interrupt: {current_date_str}, pending={pending_raw}")
+            pool = db.get_pool()
+            rows = await pool.fetch("SELECT id FROM cameras WHERE status = 'active'")
+            resume_cam_ids = [r["id"] for r in rows]
+
+            if resume_cam_ids:
+                _pending_scan_dates.extend(pending_raw)
+                _daily_scan_running = True
+                resume_date = TZ.localize(datetime.strptime(current_date_str, "%Y-%m-%d"))
+                asyncio.create_task(
+                    _daily_scan_worker(resume_date, resume_cam_ids),
+                    name=f"cron_daily_{current_date_str}_resume",
+                )
+                wlogger.info(f"[startup] Resumed cron cho {current_date_str}")
+
+    # ── Ondemand worker ──────────────────────────────────────────────
     ondemand_task: asyncio.Task | None = None
     if _redis:
+        # Requeue job bị interrupt (đang processing khi container down)
+        stale = await _redis.lrange(PROCESSING_KEY, 0, -1)
+        if stale:
+            for item in stale:
+                await _redis.lpush(QUEUE_KEY, item)
+            await _redis.delete(PROCESSING_KEY)
+            logger.info(f"[startup] Requeued {len(stale)} stale ondemand job(s)")
+
         ondemand_task = asyncio.create_task(
             _run_ondemand_worker(_redis),
             name="ondemand_worker",
@@ -1648,6 +1714,26 @@ async def stats(
 async def create_job(body: JobCreate, r=Depends(require_redis), _=Depends(verify_secret)):
     if not body.records:
         raise HTTPException(400, "records không được rỗng")
+
+    # Dedup: nếu tất cả scan_id trong request đã có job đang pending/running
+    # thì trả về job_id cũ để client theo dõi chung, không tạo job mới
+    scan_ids = [str(rec["scan_id"]) for rec in body.records if "scan_id" in rec]
+    if scan_ids:
+        existing_job_ids = await r.hmget(SCAN_JOB_KEY, *scan_ids)
+        active_job_ids = [jid for jid in existing_job_ids if jid]
+        if active_job_ids:
+            existing_job_id = active_job_ids[0]
+            raw = await r.get(f"job:status:{existing_job_id}")
+            if raw:
+                status = json.loads(raw)
+                if status.get("status") in ("pending", "running"):
+                    logger.info(f"Dedup job {existing_job_id} cho scan_ids={scan_ids}")
+                    return {"job_id": existing_job_id, "status": status["status"], "deduped": True}
+
+    queue_len = await r.llen(QUEUE_KEY)
+    if queue_len >= 10:
+        raise HTTPException(429, f"Hàng chờ đang có {queue_len} job, vui lòng thử lại sau.")
+
     job_id  = str(uuid.uuid4())
     payload = {"job_id": job_id, "qr_value": body.qr_value, "records": body.records}
     await r.setex(
@@ -1655,6 +1741,13 @@ async def create_job(body: JobCreate, r=Depends(require_redis), _=Depends(verify
         json.dumps({"job_id": job_id, "status": "pending", "qr_value": body.qr_value}),
     )
     await r.lpush(QUEUE_KEY, json.dumps(payload))
+
+    # Lưu mapping scan_id → job_id để dedup sau
+    if scan_ids:
+        mapping = {sid: job_id for sid in scan_ids}
+        await r.hset(SCAN_JOB_KEY, mapping=mapping)
+        await r.expire(SCAN_JOB_KEY, STATUS_TTL)
+
     logger.info(f"Job {job_id} queued | {len(body.records)} record(s)")
     return {"job_id": job_id, "status": "pending"}
 

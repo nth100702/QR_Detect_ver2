@@ -73,6 +73,26 @@ services:
     environment:
       - LD_LIBRARY_PATH=/app/sdk/lib
 
+  db-backup:
+    image: postgres:16-alpine
+    container_name: qr_db_backup
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./data/backups:/backups
+    entrypoint: >
+      sh -c "while true; do
+        pg_dump -h postgres -U $$POSTGRES_USER $$POSTGRES_DB
+          | gzip > /backups/qrdb_$$(date +%Y%m%d_%H%M).sql.gz &&
+        find /backups -name '*.sql.gz' -mtime +30 -delete;
+        sleep 86400;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 networks:
   default:
     name: qr_network
