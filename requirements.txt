@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+PyJWT
 
 redis[hiredis]
 

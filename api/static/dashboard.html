@@ -1437,13 +1437,15 @@ tailwind.config = {
      JAVASCRIPT — 100% unchanged from original
 ═══════════════════════════════════════════════════════ -->
 <script>
-const H = { 'X-Secret': '', 'Content-Type': 'application/json' };
-function getSecret() { return sessionStorage.getItem('api_secret') || ''; }
-function setSecret(s) { sessionStorage.setItem('api_secret', s); H['X-Secret'] = s; }
-H['X-Secret'] = getSecret();
+const H = { 'Content-Type': 'application/json' };
+function getToken() { return sessionStorage.getItem('jwt_token') || ''; }
+function setToken(t) { sessionStorage.setItem('jwt_token', t); H['Authorization'] = `Bearer ${t}`; }
+function clearToken() { sessionStorage.removeItem('jwt_token'); delete H['Authorization']; }
+if (getToken()) H['Authorization'] = `Bearer ${getToken()}`;
 
 async function apiFetch(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { ...H, ...(opts.headers || {}) } });
+  if (res.status === 401) { clearToken(); location.reload(); return; }
   if (!res.ok) { const txt = await res.text(); throw new Error(`HTTP ${res.status}: ${txt}`); }
   return res.json();
 }
@@ -1463,20 +1465,23 @@ function app() {
     },
 
     // ── Auth ─────────────────────────────────────────────
-    authed: !!getSecret(), role: '',
+    authed: !!getToken(), role: '',
     loginInput: '', loginError: '', loginLoading: false,
 
     async doLogin() {
       if (!this.loginInput.trim()) return;
       this.loginLoading = true; this.loginError = '';
       try {
-        const res = await fetch('/auth/role', { headers: { 'X-Secret': this.loginInput.trim() } });
+        const res = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ secret: this.loginInput.trim() }),
+        });
         if (!res.ok) { this.loginError = 'Secret không đúng. Thử lại.'; return; }
-        const { role } = await res.json();
-        setSecret(this.loginInput.trim());
+        const { token, role } = await res.json();
+        setToken(token);
         this.role = role;
         this.authed = true;
-        // Viewer chỉ xem trang tìm QR
         if (role === 'viewer') this.page = 'search';
         await this._afterLogin();
       } catch { this.loginError = 'Không kết nối được server.'; }
@@ -1484,7 +1489,7 @@ function app() {
     },
 
     logout() {
-      sessionStorage.removeItem('api_secret'); H['X-Secret'] = '';
+      clearToken();
       this.authed = false;
       if (this._sse) { this._sse.close(); this._sse = null; }
       if (this._taskPollTimer) { clearInterval(this._taskPollTimer); }
@@ -1512,7 +1517,7 @@ function app() {
 
     connectSSE() {
       if (this._sse) this._sse.close();
-      this._sse = new EventSource(`/worker/stream?secret=${encodeURIComponent(getSecret())}`);
+      this._sse = new EventSource(`/worker/stream?token=${encodeURIComponent(getToken())}`);
       this._sse.onopen = () => { this.sseConnected = true; };
       this._sse.onmessage = (e) => {
         try {
@@ -1686,7 +1691,7 @@ function app() {
         if (!scanId || this.downloading) return;
         this.downloading = true;
         try {
-          const res = await fetch(`/clips/${scanId}`, { headers: { 'X-Secret': getSecret() } });
+          const res = await fetch(`/clips/${scanId}`, { headers: { ...H } });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const disposition = res.headers.get('Content-Disposition') || '';
           const match = disposition.match(/filename="?([^";\n]+)"?/);
@@ -1751,7 +1756,7 @@ function app() {
         if (!job || job.saving) return;
         this.viewerJobs = { ...this.viewerJobs, [row.id]: { ...job, saving: true } };
         try {
-          const res = await fetch(`/clips/${row.id}`, { headers: { 'X-Secret': getSecret() } });
+          const res = await fetch(`/clips/${row.id}`, { headers: { ...H } });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const disposition = res.headers.get('Content-Disposition') || '';
           const match = disposition.match(/filename="?([^";\n]+)"?/);
@@ -1949,11 +1954,10 @@ function app() {
 
     // ── Init ──────────────────────────────────────────────
     async _afterLogin() {
-      // Resolve role từ server — luôn gọi để đảm bảo đúng
       try {
-        const r = await fetch('/auth/role', { headers: { 'X-Secret': getSecret() } });
+        const r = await fetch('/auth/role', { headers: { ...H } });
         if (r.ok) { const d = await r.json(); this.role = d.role; }
-        else { this.role = 'viewer'; } // fallback an toàn
+        else { this.role = 'viewer'; }
       } catch { this.role = 'viewer'; }
       if (this.role === 'viewer') this.page = 'search';
       this.connectSSE();

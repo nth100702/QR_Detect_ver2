@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import logging.handlers
+import os
 import shutil
 import uuid
 import threading
@@ -24,6 +25,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 
+import jwt
 import pytz
 import redis.asyncio as aioredis
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -31,6 +33,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path as FilePath
@@ -77,7 +80,28 @@ CRON_CURRENT_KEY = "cron:current_date"  # date đang chạy "YYYY-MM-DD"
 CRON_PENDING_KEY = "cron:pending_dates" # list các ngày chờ backfill
 
 # ── Auth ─────────────────────────────────────────────────────────
-_api_key_header = APIKeyHeader(name="X-Secret", auto_error=True)
+_JWT_SECRET   = os.environ.get("JWT_SECRET", API_SECRET + "_jwt")
+_JWT_ALG      = "HS256"
+_JWT_TTL_SEC  = 8 * 3600  # 8 giờ
+
+_bearer       = HTTPBearer(auto_error=False)
+_api_key_header = APIKeyHeader(name="X-Secret", auto_error=False)
+
+def _make_token(role: str) -> str:
+    from datetime import timezone as _tz
+    payload = {
+        "role": role,
+        "exp":  datetime.now(_tz.utc) + timedelta(seconds=_JWT_TTL_SEC),
+    }
+    return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALG)
+
+def _decode_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALG])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token hết hạn, vui lòng đăng nhập lại")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token không hợp lệ")
 
 def _resolve_role(key: str) -> str:
     """Trả về admin | viewer | raises 401."""
@@ -85,18 +109,29 @@ def _resolve_role(key: str) -> str:
         return "admin"
     if key == VIEWER_SECRET:
         return "viewer"
-    raise HTTPException(status_code=401, detail="Invalid API secret")
+    raise HTTPException(status_code=401, detail="Invalid secret")
 
-def verify_secret(key: str = Security(_api_key_header)):
-    """Cho phép cả admin lẫn viewer (GET endpoints)."""
-    _resolve_role(key)
-    return key
+def _get_role_from_request(
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer),
+    api_key: str | None                        = Security(_api_key_header),
+) -> str:
+    """Đọc role từ JWT Bearer token hoặc X-Secret header (backward compat)."""
+    if creds:
+        payload = _decode_token(creds.credentials)
+        return payload["role"]
+    if api_key:
+        return _resolve_role(api_key)
+    raise HTTPException(status_code=401, detail="Chưa đăng nhập")
 
-def verify_admin(key: str = Security(_api_key_header)):
-    """Chỉ cho phép admin (POST/DELETE/trigger)."""
-    if _resolve_role(key) != "admin":
+def verify_secret(role: str = Depends(_get_role_from_request)):
+    """Cho phép cả admin lẫn viewer."""
+    return role
+
+def verify_admin(role: str = Depends(_get_role_from_request)):
+    """Chỉ cho phép admin."""
+    if role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
-    return key
+    return role
 
 # ── Redis helper ─────────────────────────────────────────────────
 _redis: aioredis.Redis | None = None
@@ -1531,9 +1566,15 @@ async def serve_ui():
 
 # ── SSE: /worker/stream ──────────────────────────────────────────
 @app.get("/worker/stream")
-async def worker_stream(request: Request, secret: str = Query("")):
-    if secret not in (API_SECRET, VIEWER_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid secret")
+async def worker_stream(request: Request, token: str = Query(""), secret: str = Query("")):
+    # Ưu tiên JWT token, fallback X-Secret query param (backward compat)
+    if token:
+        _decode_token(token)  # raises 401 nếu invalid/expired
+    elif secret:
+        if secret not in (API_SECRET, VIEWER_SECRET):
+            raise HTTPException(status_code=401, detail="Invalid secret")
+    else:
+        raise HTTPException(status_code=401, detail="Chưa đăng nhập")
 
     async def event_gen():
         from scanner.state import read_state
@@ -1590,11 +1631,21 @@ class ScanTrigger(BaseModel):
     start_time: str = "08:00"
     end_time:   str = "19:00"
 
-# ── Health ───────────────────────────────────────────────────────
+# ── Auth endpoints ───────────────────────────────────────────────
+class LoginBody(BaseModel):
+    secret: str
+
+@app.post("/auth/login")
+async def login(body: LoginBody):
+    role = _resolve_role(body.secret)
+    token = _make_token(role)
+    return {"token": token, "role": role, "expires_in": _JWT_TTL_SEC}
+
 @app.get("/auth/role")
-async def get_role(key: str = Security(_api_key_header)):
-    """Trả về role của secret hiện tại để frontend phân quyền UI."""
-    return {"role": _resolve_role(key)}
+async def get_role(role: str = Depends(_get_role_from_request)):
+    return {"role": role}
+
+# ── Health ───────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health(_=Depends(verify_secret)):
